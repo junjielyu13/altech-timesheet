@@ -7,7 +7,8 @@ This file is for AI coding agents to read. It explains what this workspace is, h
 **GIWA** is a project-management platform built on **Redmine** (it may have RedmineUP plugins such as Agile, Drive, etc. installed).
 The actual address lives in `GIWA_URL` in `.env`; it is not hard-coded in the code or docs.
 
-The purpose of this workspace: via the **Redmine REST API**, let the user query, analyze, and operate on GIWA's data (issues / time entries / projects, etc.) using natural language.
+The purpose of this workspace: a **timesheet web page** that logs time entries to GIWA through the **Redmine REST API**.
+Querying or updating issues is out of scope here — the user does that through a Redmine MCP server. Don't add issue-query commands back to the CLI.
 
 ## User
 
@@ -26,14 +27,7 @@ GIWA_KEY=<API key>
 
 The API key is equivalent to account permissions. **Do not write the key into any file that will be committed to git, and do not print it into the conversation.** Read it from `.env` / environment variables when making calls.
 
-## How to work
-
-The user states needs in plain language, and the agent calls the Redmine API directly to fulfill them. Two modes:
-
-1. **Ad-hoc query** — call the API on the spot to answer; doesn't necessarily get baked into a tool
-2. **Common feature** — add it to the `./giwa` CLI tool (see below) so it can be run with a single command later
-
-### ⚠️ Read / Write rules (important)
+## ⚠️ Read / Write rules (important)
 
 - 📖 **Read operations** (query, statistics, export, analysis) → do them directly
 - ✍️ **Write operations** (changing status / assignee / priority, adding comments, creating/deleting issues, editing time entries, uploading attachments)
@@ -41,17 +35,14 @@ The user states needs in plain language, and the agent calls the Redmine API dir
 
 ## CLI tool
 
-`giwa.py` (Python 3 standard library, zero dependencies) + the `giwa` wrapper script. Subcommand structure; extend it by adding a function to the `COMMANDS` dict in `giwa.py`.
+`giwa.py` (Python 3 standard library, zero dependencies) + the `giwa` wrapper script. It holds the config loading and the Redmine/GitLab HTTP helpers (`api_get/post/put/delete`, `gitlab_get`), which are injected into `timesheet_web.serve`.
 
 ```bash
-./giwa overview      # Global issue overview (open/closed, by project, by status, by assignee)
+./giwa [--port N]      # `./giwa timesheet` is kept as an alias
 ./giwa --help
 ```
 
-Already implemented:
-- `overview` — global issue overview
-- `mine` — open issues assigned to me; exports a linked `MINE.md` and opens it automatically in VS Code
-- `timesheet [--port N]` — start a local web page · **calendar week view** for logging time (implemented in `timesheet_web.py`).
+- `./giwa [--port N]` — start a local web page · **calendar week view** for logging time (implemented in `timesheet_web.py`).
   Columns = Monday–Friday, vertical axis = time; drag a block to create a time entry, release to pick a task, the block's duration converts to hours.
   Grey blocks = already-recorded time entries (read from `/time_entries.json` `from`/`to`), drawn on the grid stacked from 08:00 downward.
   They are kept un-aggregated so each carries its own `time_entry` id; Redmine stores only date+hours, so the 08:00 start is just for layout (order is arbitrary).
@@ -87,7 +78,6 @@ GitLab integration (read-only, `gitlab_cfg`/`gitlab_get` in `giwa.py`, configure
   Implementation: `gitlab_activity()` in `timesheet_web.serve` calls `/api/v4/events?after=&before=` (by week),
   and `/api/v4/projects/:id` to get the repo name (with caching). The token should ideally only have read_api+read_user. Write operations are strictly forbidden.
 
-Planned: `show #ID` (issue details + comments), `project NAME`, `due` (sorted by due date), `urgent`.
 
 ## Tests
 

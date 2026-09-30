@@ -1,11 +1,9 @@
-# GIWA — Redmine Ticket / Time-Tracking Tool
+# GIWA — Redmine Timesheet
 
-Query, analyze, and operate on the tickets, time entries, and project data of a Redmine project management platform (codenamed **GIWA** here) through the **Redmine REST API**.
-The headline feature is **logging time by dragging blocks on a web calendar**, which solves the pain of manually filling in time entries task by task every week.
+**Log time on a Redmine instance (codenamed **GIWA** here) by dragging blocks on a web calendar**, instead of filling in time entries task by task every week.
+Zero dependencies — Python 3 standard library only, talking to the **Redmine REST API**.
 
-It has two parts:
-1. **The `./giwa` CLI tool** — one-command queries for common info (zero dependencies, Python 3 standard library only)
-2. **A natural-language workflow** — just ask Claude (or any assistant that can call APIs) to do the work for you in plain language
+> Querying or updating issues is out of scope: use a Redmine MCP server with your AI assistant for that. This repo only does the timesheet.
 
 > This is a personal tool built for a specific Redmine instance. Just put your own Redmine URL and API key into `.env` and it works with any Redmine site.
 
@@ -15,7 +13,7 @@ It has two parts:
 
 - **Python 3** (standard library only, no `pip install` needed)
 - A **Redmine** site + your account's **API key**
-- Optional: a browser (for logging time via the `timesheet` web page), VS Code (`mine` will open the exported file with it automatically)
+- A browser (the `timesheet` web page opens in it)
 
 ## Install & Configure
 
@@ -39,28 +37,16 @@ Get the API key from Redmine → **My account** → **API access key** → **Sho
 
 ---
 
-## 1. CLI Tool
+## Usage
 
 ```bash
-./giwa overview              # global ticket overview
-./giwa mine                  # your open tickets → export to MINE.md (with clickable links)
-./giwa timesheet             # open a local web page (calendar week view), drag blocks to log time and submit
+./giwa                      # open a local web page (calendar week view), drag blocks to log time and submit
+./giwa --port 8790           # use another port (default 8765)
 ./giwa --help                # show help
 ```
 
-### overview output
-- Total ticket count + open / closed stats
-- Distribution by project
-- Distribution by status
-- Top 15 by assignee
-
-### mine output
-Generates `MINE.md`: split into two groups, "🔧 To do" and "✅ Resolved, pending closure", grouped by project,
-where each ticket number is a Markdown link (e.g. `[#1234](https://your-redmine-host/issues/1234)`).
-Open it in an editor that supports Markdown preview and click through to the corresponding ticket.
-
-### timesheet — log time (solves the Monday pain of logging time task by task)
-`./giwa timesheet` starts a local web page (**calendar week view**) and opens your browser automatically (implementation in `timesheet_web.py`):
+### What the page does
+`./giwa` starts a local web page (**calendar week view**) and opens your browser automatically (implementation in `timesheet_web.py`):
 
 ![GIWA timesheet — calendar week view](docs/timesheet.png)
 
@@ -82,34 +68,9 @@ Open it in an editor that supports Markdown preview and click through to the cor
   Not listed? Pick **✏️ Enter a GIWA ID manually…** to type the ticket number directly (it's validated before being added).
 - **This week's GitLab activity** (floating panel in the bottom-right corner, requires `GITLAB_URL`/`GITLAB_TOKEN`, read-only):
   lists by day which branch was pushed to which repo (commit count) and which MRs were opened/merged; the repo, branch, and MR are clickable links into GitLab, and a `GIWA<number>` in a branch name auto-links to the ticket.
-- The default port is 8765; if it's in use, run `./giwa timesheet --port 8790`.
+- The default port is 8765; if it's in use, run `./giwa --port 8790`.
 
 > 🌐 The web page is multi-language: it **auto-detects your browser language** and defaults to English, with a language switcher button for **EN / 中文 / ES / CA** (English, Chinese, Spanish, Catalan).
-
-### Extending
-`giwa.py` uses a subcommand structure; add a new command simply by adding a function to the `COMMANDS` dict
-(planned: `mine`, `show #ID`, `project NAME`, `due`, `urgent`).
-
----
-
-## 2. Natural-Language Workflow
-
-When you don't feel like typing commands, just tell Claude what you want in plain language and it'll call the Redmine API to get it done. For example:
-
-| You say | Claude does |
-|---|---|
-| "What's the status of #1234, who commented?" | Pulls the details + comment history and summarizes |
-| "How many tickets are left unfinished in project X?" | Filters open tickets and lists them |
-| "How many hours did I log this week?" | Queries time entries and totals them |
-| "Which of mine are due soon?" | Filters sorted by due date |
-| "Set #1234 to In Progress" | Updates the ticket (**write operation, confirm first**) |
-| "Create 5 tickets for me: …" | Bulk-creates (**write operation, confirm first**) |
-
-### Read / Write rules
-- 📖 **Read operations** (query, stats, export, analysis) → done directly
-- ✍️ **Write operations** (change status, add comments, create/delete tickets, edit time entries) → Claude will first explain "what it's about to change" and only execute **after you confirm**
-
----
 
 ## Testing
 
@@ -124,17 +85,5 @@ python tests/test_timesheet.py        # asserts UI behaviour + writes docs/times
 It checks: the calendar renders (5 day columns + already-logged chips), drag-to-create a block opens the task popup, the **manual GIWA-ID** option is present, the **GitLab links** (repo / branch / MR) are clickable, and the **language switcher** (EN/中文/ES/CA) updates the UI. Playwright is a **dev-only** dependency — the tool itself stays zero-dependency.
 
 ---
-
-## What the Redmine API Can Do (quick reference)
-
-- **Issues**: full CRUD, rich filtering (status / project / assignee / time / custom fields), `include` comment history, attachments, relations, sub-issues
-- **Time Entries**: full CRUD
-- **Projects / Versions / Categories / Wiki / Memberships / Groups**: full CRUD (some require admin privileges)
-- **Attachments**: upload / download / delete
-- **Search** (full-text), **News**, **Issue Relations**
-- **Enumerations** (statuses, trackers, priorities, roles): read-only
-- **Plugins** (Agile, Checklists, etc.): each has its own separate API, to be verified individually
-
-> What you can actually do depends on your account's privileges. A regular account usually has permission for everyday ticket / time-entry / comment operations, while admin-level operations (creating projects, managing users) will mostly be denied.
 
 See [`AGENTS.md`](./AGENTS.md) for detailed working conventions and extension notes (read by AI coding agents; `CLAUDE.md` is a symlink to it for Claude Code).

@@ -3,9 +3,6 @@
 .claude/settings.local.json
 .claude/
 
-# 个人导出数据
-MINE.md
-
 # Python
 __pycache__/
 *.pyc
