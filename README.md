@@ -95,7 +95,7 @@ Then just run `./timesheet`:
 - Drafts learn from your corrections: what you submit (resized drafts, blocks you added by hand) is recorded in `drafts/learned.jsonl`, and with the drafts you deleted it shapes the next week's drafts.
 - `TIMESHEET_AUTODRAFT=0` turns the launch drafting off. Without the `claude` CLI the chat button is disabled and the rest of the page works as before.
 
-Tip: `alias timesheet='~/path/to/altech-timesheet/timesheet'` in your shell rc lets you start it from anywhere. There is one entry point, `./timesheet`; the drafting itself is an internal Claude Code skill the chat uses (`.claude/skills/timesheet-draft`), not a slash command. `drafts/` holds real data and is git-ignored.
+There is one entry point, `./timesheet`, run from the project folder; the drafting itself is an internal Claude Code skill the chat uses (`.claude/skills/timesheet-draft`), not a slash command. `drafts/` holds real data and is git-ignored.
 
 ## Testing
 
