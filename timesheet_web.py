@@ -21,7 +21,7 @@ import webbrowser
 
 ACTIVITY_OTHERS = 17  # the time-entry activity type the user normally uses (Others)
 
-# Draft files written by the /timesheet-draft skill: drafts/<monday>.json (git-ignored, local data only).
+# Draft files written by the timesheet-draft skill: drafts/<monday>.json (git-ignored, local data only).
 DRAFTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drafts")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _HM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -77,6 +77,71 @@ def remove_drafts(week_start, keys, drafts_dir=None):
     return removed
 
 
+def _generated_at(week_start, drafts_dir=None):
+    """When a week's draft file was generated (local naive datetime), or None."""
+    raw = load_drafts(week_start, drafts_dir).get("generated_at")
+    try:
+        dt = datetime.datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    return dt.astimezone().replace(tzinfo=None) if dt.tzinfo else dt
+
+
+def autodraft_plan(today=None, drafts_dir=None):
+    """What the launch auto-draft still has to do, so a second launch in the same week costs nothing:
+    "last" unless last week was drafted after it ended; "this" when this week has finished days that
+    weren't drafted yet (never on Monday)."""
+    today = today or datetime.date.today()
+    monday = today - datetime.timedelta(days=today.weekday())
+    last = (monday - datetime.timedelta(days=7)).isoformat()
+    plan = []
+    g = _generated_at(last, drafts_dir)
+    if g is None or g < datetime.datetime.combine(monday, datetime.time()):
+        plan.append("last")
+    if 0 < today.weekday() <= 5:
+        g = _generated_at(monday.isoformat(), drafts_dir)
+        if g is None or g < datetime.datetime.combine(today, datetime.time()):
+            plan.append("this")
+    return plan
+
+
+def record_submitted(week_start, entries, drafts_dir=None):
+    """Append what was submitted (vs. what was drafted) to drafts/learned.jsonl, so the skill can learn
+    from the user's corrections: resized drafts, hand-made blocks, and (via "dismissed") deleted drafts."""
+    _drafts_path(week_start, drafts_dir)   # validates week_start
+    rows = []
+    for e in entries:
+        try:
+            rows.append({"week": week_start, "date": str(e["date"]), "issue_id": int(e["issue_id"]),
+                         "hours": round(float(e["hours"]), 2), "draft_key": e.get("draft_key") or None,
+                         "draft_hours": None if e.get("draft_hours") is None else round(float(e["draft_hours"]), 2)})
+        except (KeyError, TypeError, ValueError):
+            continue
+    if rows:
+        d = drafts_dir or DRAFTS_DIR
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "learned.jsonl"), "a", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return len(rows)
+
+
+def friendly_error(msg):
+    """Turn "HTTP 422: {"errors":[...]}" from the Redmine helpers into a readable reason."""
+    m = re.match(r"HTTP (\d+): (.*)", str(msg), re.S)
+    if not m:
+        return str(msg)
+    code, body = int(m.group(1)), m.group(2).strip()
+    try:
+        errors = json.loads(body).get("errors") or []
+    except (ValueError, AttributeError):
+        errors = []
+    if errors:
+        return "; ".join(map(str, errors))
+    return {403: "GIWA refused: no permission for this issue (closed, or not in your projects)",
+            404: "GIWA: issue not found", 401: "GIWA: invalid API key"}.get(code, f"GIWA error {code}")
+
+
 def normalize_drafts(raw, dates, existing, lookup):
     """Validate the drafts of one week's file and turn them into page blocks.
 
@@ -117,8 +182,25 @@ def normalize_drafts(raw, dates, existing, lookup):
     return out, worked
 
 
+def _drafts_snapshot(drafts_dir=None):
+    """mtimes of the draft files (not the chat state), to tell whether a chat turn changed them."""
+    d = drafts_dir or DRAFTS_DIR
+    try:
+        names = [n for n in os.listdir(d) if n.endswith(".json") and n != "chat.json"]
+    except OSError:
+        return {}
+    return {n: os.path.getmtime(os.path.join(d, n)) for n in names}
+
+
+def chat_message(text, week_start, week_end):
+    """Prefix the user's chat message with the week the page is showing."""
+    if _DATE_RE.match(week_start or "") and _DATE_RE.match(week_end or ""):
+        return f"[Week shown in the page: {week_start} – {week_end}]\n{text}"
+    return text
+
+
 def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
-          gitlab_url="", gitlab_token="", gitlab_get=None, api_put=None, api_delete=None):
+          gitlab_url="", gitlab_token="", gitlab_get=None, api_put=None, api_delete=None, chat=None):
     extra_ids = extra_ids or []
     proj_cache = {}
 
@@ -307,7 +389,7 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
                     ecache[iid] = "?"
             e["projcode"] = pcode.get(iid) or ecache.get(iid, "?")
 
-        # Drafts from the /timesheet-draft skill, shown as pre-filled new blocks (never auto-submitted).
+        # Drafts from the timesheet-draft skill, shown as pre-filled new blocks (never auto-submitted).
         def lookup(iid):
             t = known_all.get(iid) or recent_map.get(iid)
             if t is None:
@@ -371,7 +453,7 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
                 api_post(url, key, "/time_entries.json", payload)
                 results.append({"issue_id": iid, "date": date, "hours": hours, "ok": True})
             except Exception as ex:
-                results.append({"issue_id": iid, "date": date, "hours": hours, "ok": False, "error": str(ex)})
+                results.append({"issue_id": iid, "date": date, "hours": hours, "ok": False, "error": friendly_error(ex)})
         return results
 
     def update_entry(eid, hours, comment):
@@ -403,6 +485,24 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
             self.end_headers()
             self.wfile.write(data)
 
+        def _stream_chat(self, text):
+            """Stream one chat turn to the page as NDJSON. The turn always runs to the end, even if
+            the page goes away, so the Claude process is ready for the next message."""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            before, alive = _drafts_snapshot(), True
+            for ev in chat.send(text):
+                if ev["t"] == "done":
+                    ev["drafts_changed"] = _drafts_snapshot() != before
+                if alive:
+                    try:
+                        self.wfile.write((json.dumps(ev) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                    except OSError:
+                        alive = False
+
         def do_GET(self):
             p = urllib.parse.urlparse(self.path)
             if p.path == "/":
@@ -425,6 +525,12 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
                     self._send(200, json.dumps(issue_brief(iid)))
                 except BaseException as e:
                     self._send(404, json.dumps({"error": str(e) or "not found"}))
+            elif p.path == "/api/chat/state":
+                ad = chat.autodraft if chat else "off"
+                if ad == "pending" and not autodraft_plan():
+                    ad = "up-to-date"   # this week's launch already drafted what's needed
+                self._send(200, json.dumps({"enabled": bool(chat and chat.enabled), "autodraft": ad,
+                                            "stats": chat.stats if chat else {}}))
             elif p.path == "/api/ping":
                 state["last"] = time.monotonic()
                 self._send(200, "{}")
@@ -455,6 +561,37 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
                     self._send(200, json.dumps({"removed": removed}))
                 except Exception as e:
                     self._send(400, json.dumps({"error": str(e)}))
+            elif self.path == "/api/chat":
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                if not (chat and chat.enabled):
+                    self._send(503, json.dumps({"error": "chat not available"}))
+                    return
+                if body.get("auto"):
+                    plan = autodraft_plan()
+                    if not plan or not chat.claim_autodraft():
+                        self._send(409, json.dumps({"error": "nothing to auto-draft"}))
+                        return
+                    from chat import auto_draft_message
+                    text = auto_draft_message(plan)
+                else:
+                    text = (body.get("message") or "").strip()
+                    if not text:
+                        self._send(400, json.dumps({"error": "empty message"}))
+                        return
+                self._stream_chat(chat_message(text, body.get("week_start"), body.get("week_end")))
+            elif self.path == "/api/drafts/learn":   # local file only, never GIWA
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                try:
+                    self._send(200, json.dumps({"recorded": record_submitted(body.get("week_start", ""),
+                                                                             body.get("entries") or [])}))
+                except Exception as e:
+                    self._send(400, json.dumps({"error": str(e)}))
+            elif self.path == "/api/chat/reset":
+                if chat:
+                    chat.reset()
+                self._send(200, "{}")
             elif self.path == "/api/close":
                 self._send(200, "{}")
                 threading.Thread(target=srv.shutdown, daemon=True).start()
@@ -499,6 +636,9 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
         srv.serve_forever()
     except KeyboardInterrupt:
         srv.shutdown()
+    finally:
+        if chat:
+            chat.stop()
     print("\nTime calendar service stopped (page closed or stopped manually).")
 
 
@@ -557,7 +697,7 @@ HTML_PAGE = r'''<!DOCTYPE html>
   .block .x:hover { opacity:1; }
   .block .dur { font-weight:700; }
   .block.preview { opacity:.55; }
-  /* a draft from /timesheet-draft: a new block with a dashed edge; hover shows why it was drafted */
+  /* a draft from the timesheet-draft skill: a new block with a dashed edge; hover shows why it was drafted */
   .block.draft { background:#f07a5f; outline:2px dashed rgba(255,255,255,.9); outline-offset:-3px; }
   /* already-logged blocks: greyed, laid out from 08:00 down; drag to move, resize edges to adjust hours, × to delete */
   .block.locked { background:#eef0f2; color:#6b7178; border-left:3px solid var(--locked); cursor:move; box-shadow:none; }
@@ -575,6 +715,32 @@ HTML_PAGE = r'''<!DOCTYPE html>
   .btn { border:0; border-radius:7px; padding:8px 16px; cursor:pointer; font-size:14px; font-weight:600; }
   .btn-ghost { background:#f0f1f3; color:#333; }
   .btn-primary { background:var(--accent); color:#fff; }
+  /* chat panel (right drawer): a headless Claude that reads the sources and edits drafts, never submits */
+  .chatbtn { margin-left:10px; background:#1d2129; color:#fff; border:0; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; }
+  .chatbtn:disabled { opacity:.4; cursor:default; }
+  #chat { display:none; position:fixed; top:0; right:0; bottom:0; width:380px; background:#fff; border-left:1px solid var(--line); z-index:45; flex-direction:column; box-shadow:-4px 0 16px rgba(0,0,0,.06); }
+  body.chat-open #chat { display:flex; }
+  body.chat-open { margin-right:380px; }
+  #chat .ch-head { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--line); }
+  #chat .ch-head b { font-size:15px; margin-right:auto; }
+  #chat .ch-head button { background:#f0f1f3; border:0; border-radius:6px; padding:5px 10px; cursor:pointer; font-size:12px; }
+  /* status line: context share, 5-hour and weekly usage (like the Claude Code HUD) */
+  #chat .ch-stats { padding:6px 14px; border-bottom:1px solid #f0f1f3; font-size:11px; color:#555; display:flex; flex-direction:column; gap:2px; font-variant-numeric:tabular-nums; }
+  #chat .ch-stats .bar { font-family:ui-monospace,Menlo,monospace; letter-spacing:-1px; }
+  #chat .ch-stats .lo .bar { color:var(--ok); }
+  #chat .ch-stats .mid .bar { color:#c87f0a; }
+  #chat .ch-stats .hi .bar { color:#c0392b; }
+  #chat .ch-stats .rs { color:#8a9099; }
+  #chat .ch-note { font-size:11px; color:#8a9099; padding:8px 14px; border-bottom:1px solid #f0f1f3; }
+  #chatLog { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:8px; }
+  .cm { font-size:13px; line-height:1.45; padding:8px 10px; border-radius:8px; max-width:92%; overflow-wrap:anywhere; }
+  .cm.user { align-self:flex-end; background:var(--accent); color:#fff; }
+  .cm.assistant { align-self:flex-start; background:#f3f4f6; }
+  .cm.tool { align-self:flex-start; color:#8a9099; font-size:11px; padding:0 2px; }
+  .cm.err { align-self:flex-start; background:#fdecea; color:#c0392b; }
+  .cm code { background:rgba(0,0,0,.06); padding:0 3px; border-radius:3px; font-size:12px; }
+  #chat .ch-input { display:flex; gap:8px; padding:10px 14px; border-top:1px solid var(--line); }
+  #chatInput { flex:1; resize:none; height:60px; border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; font-size:13px; }
   footer { position:sticky; bottom:0; background:#fff; border-top:1px solid var(--line); padding:12px 20px; display:flex; align-items:center; gap:16px; }
   footer .grand { font-size:16px; font-weight:700; }
   footer .hint { color:#8a9099; font-size:12px; }
@@ -611,6 +777,7 @@ HTML_PAGE = r'''<!DOCTYPE html>
     <button onclick="changeWeek(0,true)" data-i18n="thisWeek">This week</button>
     <button onclick="changeWeek(1)" data-i18n="nextWeek">Next ▶</button>
   </div>
+  <button class="chatbtn" id="chatBtn" onclick="toggleChat()" data-i18n="chatOpen">💬 Claude</button>
   <select class="langsel" id="langSel" onchange="setLang(this.value)" title="Language">
     <option value="en">English</option>
     <option value="zh">中文</option>
@@ -644,6 +811,20 @@ HTML_PAGE = r'''<!DOCTYPE html>
   <span class="hint" data-i18n="footerHint">Drag the timeline to add a block. Grey blocks = logged hours — resize to edit (turns blue), × to delete.</span>
   <button class="btn btn-submit" id="submitBtn" onclick="submitAll()" data-i18n="submit">Submit to GIWA</button>
 </footer>
+
+<aside id="chat">
+  <div class="ch-head"><b data-i18n="chatTitle">Claude</b>
+    <button onclick="newChat()" data-i18n="chatNew">New chat</button>
+    <button onclick="setChatOpen(false)" title="×">×</button></div>
+  <div class="ch-stats" id="chatStats" style="display:none"></div>
+  <div class="ch-note" data-i18n="chatNote">Claude can read your sources and edit drafts. It can't submit: you do that with the button below.</div>
+  <div id="chatLog"></div>
+  <div class="ch-input">
+    <textarea id="chatInput" data-i18n-ph="chatPlaceholder" placeholder="Ask Claude to change the drafts… (Enter to send)"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();sendChat(this.value);}"></textarea>
+    <button class="btn btn-primary" id="chatSend" onclick="sendChat(document.getElementById('chatInput').value)" data-i18n="chatSend">Send</button>
+  </div>
+</aside>
 
 <div id="overlay" onclick="closePopup()"></div>
 <div id="popup">
@@ -701,6 +882,12 @@ const I18N = {
     deleteOk: "✓ Entry deleted from GIWA.", deleteFailed: e => `Delete failed: ${e}`,
     draftsLoaded: n => `📝 ${n} draft ${n === 1 ? 'block' : 'blocks'} loaded (dashed edge). Review them, then submit yourself.`,
     workedPlaceholder: h => `${h} (Factorial)`,
+    chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "New chat", chatSend: "Send",
+    statContext: "Context", statUsage: "Usage (5h)", statWeekly: "Weekly", resetsIn: x => `resets in ${x}`,
+    chatPlaceholder: "Ask Claude to change the drafts… (Enter to send)",
+    chatNote: "Claude can read your sources and edit drafts. It can't submit: you do that with the button below.",
+    chatThinking: "…thinking", chatAuto: "Draft last week and this week (automatic on launch)",
+    chatDisabled: "The chat needs the claude CLI", chatDenied: n => `⛔ Not allowed here: ${n}`, chatError: e => `Chat error: ${e}`,
   },
   zh: {
     title: "Altech 工时日历",
@@ -742,6 +929,12 @@ const I18N = {
     deleteOk: "✓ 已从 GIWA 删除。", deleteFailed: e => `删除失败: ${e}`,
     draftsLoaded: n => `📝 已载入 ${n} 个工时草稿（虚线边框），检查后请自己提交。`,
     workedPlaceholder: h => `${h}（Factorial）`,
+    chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "新对话", chatSend: "发送",
+    statContext: "上下文", statUsage: "5 小时用量", statWeekly: "本周用量", resetsIn: x => `${x} 后重置`,
+    chatPlaceholder: "让 Claude 修改草稿…（Enter 发送）",
+    chatNote: "Claude 能读取各数据源、修改草稿，但不能提交：提交请用下方按钮。",
+    chatThinking: "…思考中", chatAuto: "生成上周和本周的草稿（启动时自动）",
+    chatDisabled: "聊天需要安装 claude 命令行", chatDenied: n => `⛔ 这里不允许：${n}`, chatError: e => `聊天出错：${e}`,
   },
   es: {
     title: "Calendario de horas Altech",
@@ -783,6 +976,12 @@ const I18N = {
     deleteOk: "✓ Entrada eliminada de GIWA.", deleteFailed: e => `Error al eliminar: ${e}`,
     draftsLoaded: n => `📝 ${n} borrador${n === 1 ? '' : 'es'} cargado${n === 1 ? '' : 's'} (borde discontinuo). Revísalos y envíalos tú.`,
     workedPlaceholder: h => `${h} (Factorial)`,
+    chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "Nuevo chat", chatSend: "Enviar",
+    statContext: "Contexto", statUsage: "Uso (5 h)", statWeekly: "Semanal", resetsIn: x => `se reinicia en ${x}`,
+    chatPlaceholder: "Pide a Claude que cambie los borradores… (Enter para enviar)",
+    chatNote: "Claude puede leer tus fuentes y editar borradores. No puede enviar: eso lo haces tú con el botón de abajo.",
+    chatThinking: "…pensando", chatAuto: "Borradores de la semana pasada y esta (automático al iniciar)",
+    chatDisabled: "El chat necesita la CLI de claude", chatDenied: n => `⛔ No permitido aquí: ${n}`, chatError: e => `Error del chat: ${e}`,
   },
   ca: {
     title: "Calendari d'hores Altech",
@@ -824,6 +1023,12 @@ const I18N = {
     deleteOk: "✓ Entrada eliminada de GIWA.", deleteFailed: e => `Error en eliminar: ${e}`,
     draftsLoaded: n => `📝 ${n} esborrany${n === 1 ? '' : 's'} carregat${n === 1 ? '' : 's'} (vora discontínua). Revisa'ls i envia'ls tu.`,
     workedPlaceholder: h => `${h} (Factorial)`,
+    chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "Xat nou", chatSend: "Envia",
+    statContext: "Context", statUsage: "Ús (5 h)", statWeekly: "Setmanal", resetsIn: x => `es reinicia en ${x}`,
+    chatPlaceholder: "Demana a Claude que canviï els esborranys… (Enter per enviar)",
+    chatNote: "Claude pot llegir les teves fonts i editar esborranys. No pot enviar: això ho fas tu amb el botó de sota.",
+    chatThinking: "…pensant", chatAuto: "Esborranys de la setmana passada i aquesta (automàtic en iniciar)",
+    chatDisabled: "El xat necessita la CLI de claude", chatDenied: n => `⛔ No permès aquí: ${n}`, chatError: e => `Error del xat: ${e}`,
   },
 };
 function detectLang() {
@@ -855,6 +1060,7 @@ function setLang(l) {
   T = Object.assign({}, I18N.en, I18N[l]);
   applyStatic();
   if (DATA && !DATA.error) { render(); renderGitlab(); renderStats(); }
+  renderChatStats(); renderChat();
 }
 function updateWeekLabel() {
   if (DATA && !DATA.error) document.getElementById('weekLabel').textContent = `${DATA.week_start} ~ ${DATA.week_end} ${T.weekN(DATA.week_num)}`;
@@ -862,7 +1068,8 @@ function updateWeekLabel() {
 
 const START_H = 8, END_H = 20, PXH = 72, SNAP = 15;
 const TOTAL_MIN = (END_H - START_H) * 60;
-let DATA = null, weekOffset = 0;
+// Usually opened on Monday morning to log the previous week, so Monday starts on last week.
+let DATA = null, weekOffset = new Date().getDay() === 1 ? -1 : 0;
 let blocks = [];          // new blocks {bid, issue_id, subject, date, s, e, comment}
 let bidSeq = 1;
 let drag = null;          // {date, col, s, e, el}
@@ -905,7 +1112,9 @@ function targetOf(date) {
   return (DATA && DATA.worked && DATA.worked[date] != null) ? DATA.worked[date] : null;
 }
 
-async function load() {
+// keepManual: reload the week's data (e.g. after the chat changed the drafts) but keep hand-made new blocks.
+async function load(keepManual) {
+  const manual = keepManual ? blocks.filter(b => !b.draftKey) : [];
   const ld = document.getElementById('calLoading');
   ld.classList.add('on');
   // Disable submit while the page is loading; recalc() re-evaluates it once data is rendered.
@@ -915,16 +1124,21 @@ async function load() {
     const r = await fetch('/api/init?week=' + weekOffset);
     DATA = await r.json();
     if (DATA.error) { document.getElementById('weekLabel').textContent = T.errPrefix + DATA.error; return; }
-    blocks = (DATA.drafts || []).map(d => ({ bid: bidSeq++, issue_id: d.issue_id, subject: d.subject || '',
-      projcode: d.projcode || '?', date: d.date, s: d.s, e: d.e, comment: d.comment || '',
-      draftKey: d.key, reason: d.reason || '' }));
+    blocks = (DATA.drafts || []).map(d => {
+      // Keep a draft inside the visible axis (e.g. one placed after clock-out); its length is what counts.
+      const dur = Math.min(d.e - d.s, TOTAL_MIN), s = Math.max(START_H*60, Math.min(d.s, END_H*60 - dur));
+      return { bid: bidSeq++, issue_id: d.issue_id, subject: d.subject || '', projcode: d.projcode || '?',
+               date: d.date, s, e: s + dur, comment: d.comment || '', draftKey: d.key, reason: d.reason || '',
+               draftHours: (d.e - d.s) / 60 };
+    }).concat(manual);
     buildLogged();
     restoreTimer();
     document.getElementById('result').innerHTML = '';
     render();
     renderGitlab();
     renderStats();
-    if (blocks.length) showMsg(T.draftsLoaded(blocks.length), true);
+    if (blocks.some(b => b.draftKey)) showMsg(`<span id="draftNote"></span>`, true);
+    updateDraftNote();
     // A timer stopped on a day outside the previously-shown week is flushed once that week is loaded.
     if (pendingTimerBlock && DATA.days.some(d => d.date === pendingTimerBlock.date)) {
       blocks.push(pendingTimerBlock); pendingTimerBlock = null; renderBlocks(); recalc();
@@ -1195,6 +1409,12 @@ function closePopup() {
   pending = null;
 }
 
+// The "N drafts loaded" notice follows the drafts still on the page and goes away with the last one.
+function updateDraftNote() {
+  const el = document.getElementById('draftNote'); if (!el) return;
+  const n = blocks.filter(b => b.draftKey).length;
+  if (n) el.textContent = T.draftsLoaded(n); else el.closest('.msg').remove();
+}
 function showMsg(text, ok) {
   const box = document.getElementById('result');
   box.innerHTML = `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`;
@@ -1369,6 +1589,20 @@ function recalc() {
   const btn = document.getElementById('submitBtn');
   if (btn) btn.disabled = blocks.length === 0 && !logged.some(l => l.modified);
   renderStats();
+  updateDraftNote();
+}
+
+// Per-day check shown before submitting: total vs. target (typed, or Factorial), flagging gaps and overs.
+function submitSummary() {
+  return DATA.days.map(d => {
+    const tot = logged.filter(l => l.date === d.date).reduce((s, l) => s + (l.e - l.s) / 60, 0) +
+                blocks.filter(b => b.date === d.date).reduce((s, b) => s + (b.e - b.s) / 60, 0);
+    const tg = targetOf(d.date);
+    if (!tot && tg == null) return null;
+    const diff = tg == null ? null : tot - tg;
+    const flag = diff == null ? '' : Math.abs(diff) < 0.01 ? '✓' : '⚠ ' + (diff < 0 ? T.short(fmtDot(-diff)) : T.over(fmtDot(diff)));
+    return `${dowName(d.date)} ${d.date.slice(8)}: ${fmtDot(tot)}${tg != null ? ' / ' + fmtDot(tg) : ''} ${flag}`;
+  }).filter(Boolean).join('\n');
 }
 
 async function submitAll() {
@@ -1376,7 +1610,7 @@ async function submitAll() {
   const mods = logged.filter(l => l.modified);
   if (!entries.length && !mods.length) { alert(T.alertNoBlocks); return; }
   const total = entries.reduce((s,e)=>s+e.hours,0);
-  if (!confirm(T.confirmSubmit(entries.length, mods.length, fmtDot(total)))) return;
+  if (!confirm(T.confirmSubmit(entries.length, mods.length, fmtDot(total)) + '\n\n' + submitSummary())) return;
   const btn = document.getElementById('submitBtn');
   btn.disabled = true; btn.textContent = T.submitting;
   const box = document.getElementById('result');
@@ -1407,13 +1641,20 @@ async function submitAll() {
       if (ok.length) box.innerHTML += `<div class="msg ok">${T.submitOk(ok.length)}</div>`;
       bad.forEach(b => box.innerHTML += `<div class="msg err">✗ #${b.issue_id} ${b.date} ${b.hours}h — ${b.error}</div>`);
       // Drop the successfully-created blocks from the working set; failed ones stay for retry.
-      const sent = [];
-      ok.forEach(e => { blocks = blocks.filter(b => {
-        const hit = b.issue_id===e.issue_id && b.date===e.date && Math.abs((b.e-b.s)/60 - e.hours) < 0.001;
-        if (hit && b.draftKey) sent.push(b.draftKey);
-        return !hit;
-      }); });
+      const sent = [], learned = [];
+      // One block per created entry: two identical blocks where only one went through keep the other for a retry.
+      ok.forEach(e => {
+        const i = blocks.findIndex(b => b.issue_id===e.issue_id && b.date===e.date && Math.abs((b.e-b.s)/60 - e.hours) < 0.001);
+        if (i < 0) return;
+        const b = blocks.splice(i, 1)[0];
+        if (b.draftKey) sent.push(b.draftKey);
+        learned.push({ date: b.date, issue_id: b.issue_id, hours: e.hours, draft_key: b.draftKey || null,
+                       draft_hours: b.draftKey ? decH(b.draftHours) : null });
+      });
       await forgetDrafts(sent);
+      // What was submitted vs. drafted, so next week's drafts learn from the corrections (local file only).
+      await fetch('/api/drafts/learn', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ week_start: DATA.week_start, entries: learned }) }).catch(() => {});
     }
   }
 
@@ -1423,8 +1664,111 @@ async function submitAll() {
   render();
 }
 
+// ---------- Chat panel: a headless Claude that reads the sources and edits drafts (never submits) ----------
+const CHAT = { enabled: false, busy: false, log: [], stats: {} };
+// Status line, like the Claude Code HUD: ████░░░░░░ 35% for context, 5-hour and weekly usage.
+const meter = u => { const n = Math.round(Math.min(1, Math.max(0, u)) * 10); return '█'.repeat(n) + '░'.repeat(10 - n); };
+function untilStr(ts) {
+  const m = Math.max(0, Math.round((ts * 1000 - Date.now()) / 60000));
+  const d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60;
+  return d ? `${d}d ${h}h` : `${h}h ${mm}m`;
+}
+function renderChatStats() {
+  const el = document.getElementById('chatStats'); if (!el) return;
+  const s = CHAT.stats || {}, parts = [];
+  const lvl = u => u >= .8 ? 'hi' : u >= .5 ? 'mid' : 'lo';
+  const item = (label, u, reset) => `<span class="${lvl(u)}">${label} <span class="bar">${meter(u)}</span> ${Math.round(u * 100)}%` +
+    (reset ? ` <span class="rs">· ${T.resetsIn(untilStr(reset))}</span>` : '') + '</span>';
+  if (s.context != null) parts.push(item(T.statContext, s.context));
+  if (s.five_hour && s.five_hour.used != null) parts.push(item(T.statUsage, s.five_hour.used, s.five_hour.resets_at));
+  if (s.seven_day && s.seven_day.used != null) parts.push(item(T.statWeekly, s.seven_day.used, s.seven_day.resets_at));
+  el.innerHTML = parts.join('');
+  el.style.display = parts.length ? '' : 'none';
+}
+function loadChatLog() { try { return JSON.parse(localStorage.getItem('ts_chat')) || []; } catch (e) { return []; } }
+function saveChatLog() { try { localStorage.setItem('ts_chat', JSON.stringify(CHAT.log.slice(-80))); } catch (e) {} }
+const escHtml = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const mdLite = s => escHtml(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>');
+function renderChat() {
+  const box = document.getElementById('chatLog'); if (!box) return;
+  const last = CHAT.log[CHAT.log.length - 1];
+  box.innerHTML = CHAT.log.map(m =>
+      m.role === 'tool' ? `<div class="cm tool">🔧 ${escHtml(m.text)}</div>` :
+      m.role === 'error' ? `<div class="cm err">${escHtml(m.text)}</div>` :
+      m.role === 'user' ? `<div class="cm user">${escHtml(m.text).replace(/\n/g, '<br>')}</div>` :
+      `<div class="cm assistant">${mdLite(m.text)}</div>`).join('') +
+    (CHAT.busy && !(last && last.role === 'assistant') ? `<div class="cm tool">${T.chatThinking}</div>` : '');
+  box.scrollTop = box.scrollHeight;
+}
+function updateChatInput() {
+  const i = document.getElementById('chatInput'), b = document.getElementById('chatSend');
+  if (i) i.disabled = CHAT.busy; if (b) b.disabled = CHAT.busy;
+}
+function setChatOpen(open) {
+  document.body.classList.toggle('chat-open', open);
+  try { localStorage.setItem('ts_chat_open', open ? '1' : '0'); } catch (e) {}
+  if (open) { renderChat(); const i = document.getElementById('chatInput'); if (i && !CHAT.busy) i.focus(); }
+}
+function toggleChat() { setChatOpen(!document.body.classList.contains('chat-open')); }
+async function initChat() {
+  let st = { enabled: false, autodraft: 'off' };
+  try { st = await (await fetch('/api/chat/state')).json(); } catch (e) {}
+  CHAT.enabled = !!st.enabled; CHAT.log = loadChatLog();
+  CHAT.stats = st.stats || {}; renderChatStats();
+  setInterval(renderChatStats, 60000);   // keep the "resets in" countdown current
+  const btn = document.getElementById('chatBtn');
+  if (!CHAT.enabled) { btn.disabled = true; btn.title = T.chatDisabled; return; }
+  let open = false; try { open = localStorage.getItem('ts_chat_open') === '1'; } catch (e) {}
+  // First page of this launch: draft last week + this week automatically.
+  if (st.autodraft === 'pending') { setChatOpen(true); sendChat(T.chatAuto, true); }
+  else setChatOpen(open);
+}
+async function sendChat(text, auto) {
+  text = (text || '').trim();
+  if (CHAT.busy || !DATA || !text) return;
+  CHAT.busy = true; updateChatInput();
+  if (!auto) document.getElementById('chatInput').value = '';
+  CHAT.log.push({ role: 'user', text }); renderChat();
+  let cur = null, changed = false;
+  try {
+    const r = await fetch('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ message: text, auto: !!auto, week_start: DATA.week_start, week_end: DATA.week_end }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || r.status); }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await rd.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.t === 'text') { if (!cur) { cur = { role: 'assistant', text: '' }; CHAT.log.push(cur); } cur.text += ev.d; }
+        else if (ev.t === 'tool') { cur = null; ev.names.forEach(n => CHAT.log.push({ role: 'tool', text: n })); }
+        else if (ev.t === 'limits') {
+          if (ev.five_hour) CHAT.stats.five_hour = ev.five_hour;
+          if (ev.seven_day) CHAT.stats.seven_day = ev.seven_day;
+          renderChatStats(); continue;
+        }
+        else if (ev.t === 'stats') { CHAT.stats.context = ev.context; renderChatStats(); continue; }
+        else if (ev.t === 'denied') { cur = null; CHAT.log.push({ role: 'error', text: T.chatDenied(ev.name) }); }
+        else if (ev.t === 'done') { if (ev.error) CHAT.log.push({ role: 'error', text: ev.error }); changed = !!ev.drafts_changed; }
+        renderChat();
+      }
+    }
+  } catch (ex) { CHAT.log.push({ role: 'error', text: T.chatError(ex.message || ex) }); }
+  CHAT.busy = false; saveChatLog(); renderChat(); updateChatInput();
+  if (changed) load(true);   // Claude edited the drafts → show them (hand-made blocks are kept)
+}
+async function newChat() {
+  if (CHAT.busy) return;
+  try { await fetch('/api/chat/reset', { method: 'POST' }); } catch (e) {}
+  CHAT.log = []; saveChatLog(); renderChat();
+}
+
 applyStatic();
-load();
+load().then(initChat);
 
 // Heartbeat: tell the server every 3s the page is still open; on close/leave, notify the server to exit automatically
 setInterval(() => { fetch('/api/ping').catch(()=>{}); }, 3000);

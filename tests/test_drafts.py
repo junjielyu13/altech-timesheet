@@ -13,7 +13,9 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from timesheet_web import load_drafts, normalize_drafts, remove_drafts  # noqa: E402
+import datetime  # noqa: E402
+from timesheet_web import (autodraft_plan, friendly_error, load_drafts, normalize_drafts,  # noqa: E402
+                           record_submitted, remove_drafts)
 
 WEEK = "2026-01-05"
 DATES = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"]
@@ -98,6 +100,74 @@ class DraftFile(unittest.TestCase):
     def test_remove_without_file_is_a_noop(self):
         self.assertEqual(remove_drafts(WEEK, ["a"], self.dir), 0)
         self.assertFalse(self.path.exists())
+
+
+class AutodraftPlan(unittest.TestCase):
+    """Week of Mon 2026-01-12; last week starts 2026-01-05."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = pathlib.Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def gen(self, week, when):
+        (self.dir / f"{week}.json").write_text(json.dumps({"generated_at": when}), encoding="utf-8")
+
+    def plan(self, day):
+        return autodraft_plan(datetime.date.fromisoformat(day), str(self.dir))
+
+    def test_monday_with_nothing_drafted_does_last_week_only(self):
+        self.assertEqual(self.plan("2026-01-12"), ["last"])
+
+    def test_last_week_drafted_while_it_was_running_is_redone(self):
+        self.gen("2026-01-05", "2026-01-08T16:30:00+01:00")
+        self.assertEqual(self.plan("2026-01-12"), ["last"])
+
+    def test_second_launch_the_same_monday_does_nothing(self):
+        self.gen("2026-01-05", "2026-01-12T09:05:00")
+        self.assertEqual(self.plan("2026-01-12"), [])
+
+    def test_midweek_adds_this_weeks_finished_days_once_a_day(self):
+        self.gen("2026-01-05", "2026-01-12T09:05:00")
+        self.assertEqual(self.plan("2026-01-14"), ["this"])
+        self.gen("2026-01-12", "2026-01-14T10:00:00")
+        self.assertEqual(self.plan("2026-01-14"), [])
+        self.assertEqual(self.plan("2026-01-15"), ["this"])
+
+    def test_broken_timestamp_counts_as_not_drafted(self):
+        self.gen("2026-01-05", "yesterday")
+        self.assertEqual(self.plan("2026-01-12"), ["last"])
+
+
+class Learned(unittest.TestCase):
+    def test_submitted_entries_are_appended(self):
+        with tempfile.TemporaryDirectory() as d:
+            n = record_submitted(WEEK, [
+                {"date": "2026-01-05", "issue_id": 101, "hours": 1.5, "draft_key": "d1", "draft_hours": 2},
+                {"date": "2026-01-05", "issue_id": "103", "hours": 0.5},
+                {"date": "2026-01-05"},   # invalid, skipped
+            ], d)
+            self.assertEqual(n, 2)
+            record_submitted(WEEK, [{"date": "2026-01-06", "issue_id": 101, "hours": 1}], d)
+            rows = [json.loads(x) for x in (pathlib.Path(d) / "learned.jsonl").read_text().splitlines()]
+            self.assertEqual(rows[0], {"week": WEEK, "date": "2026-01-05", "issue_id": 101, "hours": 1.5,
+                                       "draft_key": "d1", "draft_hours": 2})
+            self.assertEqual(rows[1]["draft_key"], None)
+            self.assertEqual(len(rows), 3)
+
+    def test_bad_week_is_rejected(self):
+        with self.assertRaises(ValueError):
+            record_submitted("../x", [], tempfile.gettempdir())
+
+
+class FriendlyError(unittest.TestCase):
+    def test_redmine_errors_are_unwrapped(self):
+        self.assertEqual(friendly_error('HTTP 422: {"errors":["Issue is invalid","Issue is closed"]}'),
+                         "Issue is invalid; Issue is closed")
+        self.assertIn("no permission", friendly_error("HTTP 403: "))
+        self.assertEqual(friendly_error("HTTP 500: <html>"), "GIWA error 500")
+        self.assertEqual(friendly_error("timeout"), "timeout")
 
 
 if __name__ == "__main__":

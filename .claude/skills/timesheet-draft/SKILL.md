@@ -1,21 +1,23 @@
 ---
 name: timesheet-draft
-description: Generate draft time entries for a week from Factorial (hours worked), Outlook (meetings), GitLab (pushes/MRs) and GIWA (issues you touched), and write them to drafts/<monday>.json so ./timesheet shows them as dashed blocks. Never submits anything. Use when the user asks to draft, pre-fill or prepare their timesheet / hours / imputación.
-argument-hint: "[this | last | YYYY-MM-DD]"
+description: Generate draft time entries for a week from Factorial (hours worked), Outlook (meetings), GitLab (pushes/MRs) and GIWA (issues you touched), and write them to drafts/<monday>.json so the timesheet page shows them as dashed blocks. Never submits anything. Use when the user asks to draft, pre-fill, redo or prepare their timesheet / hours / imputación.
+user-invocable: false
 ---
 
 # Draft the week's time entries
 
 Output is a **local file only**. This skill never creates, edits or deletes GIWA time
-entries; the user reviews the drafts in `./timesheet` and submits them there.
+entries; the user reviews the drafts in the timesheet page and submits them there. It is not
+a slash command: the page's chat panel runs it on launch and whenever the user asks.
 
 Everything you read here is real company data. It goes into `drafts/` (git-ignored) and the
 chat, never into a tracked file — this repo is public.
 
 ## 0. Which week
 
-Argument: empty or `this` = the current week; `last` = the previous one; a date = the week
-containing it. Work with Monday–Friday only. `W` = Monday's ISO date.
+Take the week(s) from the request: "this week", "last week", or a date (= the week
+containing it); default to last week. Several weeks (e.g. "last and this week") → run steps 1–4 once per week.
+Work with Monday–Friday only. `W` = Monday's ISO date.
 
 ## 1. Load local state
 
@@ -37,6 +39,17 @@ containing it. Work with Monday–Friday only. `W` = Monday's ISO date.
   per-meeting override and wins over `projects`.
 - `drafts/W.json` if it exists: keep its `dismissed` list (keys the user deleted or already
   submitted). Never re-create a draft whose key is in it.
+- **What past weeks teach** (skip if there's no history yet): `drafts/learned.jsonl` has one
+  line per submitted entry: `week, date, issue_id, hours, draft_key` (null = a block the user
+  made by hand) and `draft_hours` (what was drafted). Older `drafts/*.json` files show, in
+  `dismissed` minus what was submitted, the drafts the user deleted. Look at the last ~8 weeks:
+  - a kind of draft the user keeps deleting (e.g. MR-approval time, a meeting series) → stop
+    drafting it;
+  - drafts the user keeps resizing the same way (e.g. a meeting always logged 1h, not 30m) →
+    draft them that way;
+  - an issue the user adds by hand most weeks (a recurring task no source shows) → draft it
+    with its usual hours.
+  Say "learned from past weeks" in the reason of any draft this changes.
 
 ## 2. Gather (read-only)
 
@@ -59,7 +72,8 @@ Let `worked` = Factorial worked minutes rounded to the **nearest** 15, `logged` 
 already in GIWA for that day. Skip the day entirely if `logged >= worked - 0.25h`.
 
 **Meetings first.** Keep events that are not all-day, not cancelled, not `showAs: free`, and
-not matched by `ignore_meetings`. Map each to an issue: `config.meetings` first; otherwise the
+not matched by `ignore_meetings`. Skip a meeting whose issue already has at least that many
+hours logged on that day (it was submitted). Map each to an issue: `config.meetings` first; otherwise the
 matching `config.projects` entry, taking **external** when any attendee is outside
 `internal_domains` (a client is present) and **internal** otherwise. Room / resource
 addresses (`resource.calendar…`, `sala-…`) are not attendees. One draft per meeting at its
@@ -83,7 +97,8 @@ Candidates for that day, with weights:
 - a journal of yours on an issue (comment or field change) → 1. Ignore bulk bookkeeping: when
   you changed more than 3 issues within the same ~10 minutes with no notes, skip them all.
 
-Merge by issue (sum weights), drop issues whose time for the day is already logged, split
+Merge by issue (sum weights), drop issues that already have time logged that day (anything
+submitted is never drafted again), split
 `remaining` proportionally, round each share to the nearest 15 min (minimum 15), and give
 the rounding difference to the heaviest issue. No candidates → leave the time unallocated
 and report it.
@@ -120,7 +135,6 @@ Keys must be deterministic (same input → same key) so `dismissed` keeps workin
 
 ## 5. Report and open
 
-In chat, per day: worked vs logged vs drafted, plus anything unallocated or unmapped. Then
-start `./timesheet` in the background (if port 8765 is already in use it's running: tell the
-user to reload the page). Remind them the drafts are dashed blocks and nothing is submitted
-until they click **Submit to GIWA**.
+In chat, per day: worked vs logged vs drafted, plus anything unallocated or unmapped. The
+page reloads the drafts itself. Remind the user the drafts are dashed blocks and nothing is
+submitted until they click **Submit to GIWA**.

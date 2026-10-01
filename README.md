@@ -72,22 +72,30 @@ Get the API key from Redmine → **My account** → **API access key** → **Sho
 
 > 🌐 The web page is multi-language: it **auto-detects your browser language** and defaults to English, with a language switcher button for **EN / 中文 / ES / CA** (English, Chinese, Spanish, Catalan).
 
-## Draft the week automatically (Claude Code)
+## Drafts and the Claude chat panel
 
-If you use [Claude Code](https://claude.com/claude-code) with the Factorial, Microsoft 365 (Outlook), GitLab and Redmine MCP connectors, run the project skill:
+If you use [Claude Code](https://claude.com/claude-code) with the Factorial, Microsoft 365 (Outlook), GitLab and Redmine MCP connectors, the page drafts your hours for you. It's built for a **weekly** routine: open it on Monday morning and log the previous week.
+
+Add to `.env` the Claude Code config that has those connectors:
 
 ```
-/timesheet-draft            # this week (also: last, or any date in the week)
+CLAUDE_CONFIG_DIR=~/.claude-altech
 ```
 
-It reads your **worked hours** (Factorial), **meetings** (Outlook), **pushes/MRs** (GitLab) and the **issues you touched** (GIWA), then writes `drafts/<monday>.json` and opens `./timesheet`. Nothing is submitted:
+Then just run `./timesheet`:
 
-- Drafts show as orange blocks with a **dashed edge**; hover one to see why it was drafted. Move, resize or delete them like any new block, then click **Submit to GIWA** yourself.
-- Meetings go on the GIWA task you mapped them to in `drafts/config.json` (the skill asks the first time it meets an unmapped one). The rest of the day (worked − meetings − already logged) is split across the GIWA issues you worked on, weighted by commits.
-- A deleted or submitted draft is removed from the file and won't come back when you regenerate.
-- The day's Factorial hours become its target when you haven't typed one.
+- **On launch** a chat panel (💬 Claude, right side) drafts **last week**, plus any days of this week that are already over. On Mondays the page opens on last week. It only does this when it's needed: a second launch the same week finds the drafts already there and costs nothing (ask in the chat to redo them).
+- Drafts come from your **worked hours** (Factorial), **meetings** (Outlook), **pushes/MRs** (GitLab) and the **issues you touched** (GIWA). Anything already logged in GIWA is never drafted again.
+- Drafts show as orange blocks with a **dashed edge**; hover one to see why it was drafted. Move, resize or delete them like any new block, or ask in the chat ("move Tuesday's meeting to 12:00", "split Wednesday between #101 and #102"). The page reloads the drafts after each reply.
+- The panel's status line shows the chat's **context** use and your **5-hour** and **weekly** Claude usage, with when each resets.
+- **Nothing is submitted for you.** The chat runs Claude Code headless with an allowlist: it can read those sources and edit files under `drafts/`, and nothing else (no shell, no writes to GIWA, GitLab, Outlook or Factorial). You click **Submit to GIWA**.
+- Meetings go on the project's "Tareas internas" or, with a client present, "Tareas externas" task, as mapped in `drafts/config.json` (Claude asks the first time it meets an unmapped one). The rest of the day (worked − meetings − already logged) is split across the GIWA issues you worked on.
+- A deleted or submitted draft is removed from the file and won't come back. The day's Factorial hours become its target when you haven't typed one.
+- Before submitting, the confirm lists every day against its target (⚠ short / over). An entry GIWA refuses stays on the page with GIWA's reason (e.g. a closed issue).
+- Drafts learn from your corrections: what you submit (resized drafts, blocks you added by hand) is recorded in `drafts/learned.jsonl`, and with the drafts you deleted it shapes the next week's drafts.
+- `TIMESHEET_AUTODRAFT=0` turns the launch drafting off. Without the `claude` CLI the chat button is disabled and the rest of the page works as before.
 
-`drafts/` holds real data and is git-ignored.
+Tip: `alias timesheet='~/path/to/altech-timesheet/timesheet'` in your shell rc lets you start it from anywhere. There is one entry point, `./timesheet`; the drafting itself is an internal Claude Code skill the chat uses (`.claude/skills/timesheet-draft`), not a slash command. `drafts/` holds real data and is git-ignored.
 
 ## Testing
 
@@ -98,9 +106,10 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install playwright && playwright install chromium
 python tests/test_timesheet.py        # asserts UI behaviour + writes docs/timesheet.png
 python3 tests/test_drafts.py          # draft-file helpers (stdlib only)
+python3 tests/test_chat.py            # chat process + allowlist, with a fake claude CLI
 ```
 
-It checks: the calendar renders (5 day columns + already-logged chips), drag-to-create a block opens the task popup, the **manual GIWA-ID** option is present, the **GitLab links** (repo / branch / MR) are clickable, and the **language switcher** (EN/中文/ES/CA) updates the UI, and **drafts** render dashed, use Factorial hours as the target and are removed from the draft file when deleted. Playwright is a **dev-only** dependency — the tool itself stays zero-dependency.
+It checks: the calendar renders (5 day columns + already-logged chips), drag-to-create a block opens the task popup, the **manual GIWA-ID** option is present, the **GitLab links** (repo / branch / MR) are clickable, and the **language switcher** (EN/中文/ES/CA) updates the UI, and **drafts** render dashed, use Factorial hours as the target and are removed from the draft file when deleted, and the **chat panel** auto-drafts on launch, streams replies, reloads changed drafts and shows denied tools. Playwright is a **dev-only** dependency — the tool itself stays zero-dependency.
 
 ---
 

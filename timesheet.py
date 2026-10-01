@@ -41,7 +41,7 @@ def _env_cfg():
                     continue
                 k, _, v = line.partition("=")
                 cfg[k.strip()] = v.strip().strip('"').strip("'")
-    for k in ("GIWA_URL", "GIWA_KEY", "GIWA_EXTRA_TASKS"):
+    for k in ("GIWA_URL", "GIWA_KEY", "GIWA_EXTRA_TASKS", "CLAUDE_CONFIG_DIR", "CLAUDE_BIN", "TIMESHEET_AUTODRAFT"):
         if os.environ.get(k):
             cfg[k] = os.environ[k]
     return cfg
@@ -74,6 +74,16 @@ def gitlab_get(gurl, gtok, path):
     req = urllib.request.Request(gurl + "/api/v4" + path, headers={"PRIVATE-TOKEN": gtok})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
+
+
+def make_chat():
+    """The page's chat panel (a headless Claude Code process); disabled if `claude` isn't installed."""
+    import chat
+    c = _env_cfg()
+    here = os.path.dirname(os.path.abspath(__file__))
+    return chat.Chat(cwd=here, state_path=os.path.join(here, "drafts", "chat.json"),
+                     claude_bin=c.get("CLAUDE_BIN") or "claude", config_dir=c.get("CLAUDE_CONFIG_DIR", ""),
+                     autodraft=c.get("TIMESHEET_AUTODRAFT", "1").strip().lower() not in ("0", "false", "no", "off"))
 
 
 def die(msg, code=1):
@@ -168,7 +178,7 @@ def cmd_timesheet(url, key, rest=None):
     try:
         timesheet_web.serve(url, key, api_get, api_post, port, extra_ids=extra_task_ids(),
                             gitlab_url=gurl, gitlab_token=gtok, gitlab_get=gitlab_get,
-                            api_put=api_put, api_delete=api_delete)
+                            api_put=api_put, api_delete=api_delete, chat=make_chat())
     except RuntimeError as e:
         die(str(e))
 

@@ -78,17 +78,33 @@ GitLab integration (read-only, `gitlab_cfg`/`gitlab_get` in `timesheet.py`, conf
   Implementation: `gitlab_activity()` in `timesheet_web.serve` calls `/api/v4/events?after=&before=` (by week),
   and `/api/v4/projects/:id` to get the repo name (with caching). The token should ideally only have read_api+read_user. Write operations are strictly forbidden.
 
-Drafts (`/timesheet-draft` skill in `.claude/skills/timesheet-draft/SKILL.md`):
+Drafts (`timesheet-draft` skill in `.claude/skills/timesheet-draft/SKILL.md`; `user-invocable: false`, run by the chat panel, not a slash command — `./timesheet` is the only entry point):
   the skill reads Factorial / Outlook / GitLab / GIWA through MCP and writes `drafts/<monday>.json` (git-ignored, real data; meeting→issue map in `drafts/config.json`).
   It never writes to GIWA. `init()` loads that file via `load_drafts` + `normalize_drafts` (drops invalid drafts, out-of-week dates, unknown issues, and drafts identical to a logged entry)
   and returns `drafts` (pre-filled new blocks, `draftKey` + `reason`, rendered with the dashed `.block.draft` style) and `worked` (Factorial hours; `targetOf()` uses them when no target is typed).
   Deleting a draft or submitting it calls POST `/api/drafts/remove` → `remove_drafts`, which drops it from the file and records the key in `dismissed` so regenerating doesn't bring it back.
   Keep the skill generic — no real meeting names, project names or ids in it (public repo).
+  Learning: after a submit the page posts the created entries to `/api/drafts/learn` → `record_submitted` appends `{week, date, issue_id, hours, draft_key, draft_hours}`
+  to `drafts/learned.jsonl` (draft_key null = hand-made block); the skill reads it plus past weeks' `dismissed` to adjust its drafts.
+  Submit: one created entry removes exactly one matching block (identical blocks where one failed keep the other); refusals go through `friendly_error` (Redmine `errors` list);
+  the confirm includes `submitSummary()` (each day vs `targetOf`).
+
+Chat panel (`chat.py`, right-side drawer in the page):
+  `timesheet.make_chat()` builds a `chat.Chat`: a long-lived `claude -p --input-format stream-json --output-format stream-json` process in this repo
+  (so it has the skill), with `CLAUDE_CONFIG_DIR` from `.env` (whose MCP connectors it uses). Permissions are an allowlist (`ALLOWED_TOOLS`: read-only MCP tools,
+  Read/Glob/Grep/Skill, `Edit/Write(./drafts/**)`) plus `DISALLOWED_TOOLS` (Bash, web, Agent, `.env`); headless mode never prompts, so anything else is denied.
+  Never add a tool that writes to GIWA/GitLab/Outlook/Factorial or a shell: the user submits from the page. `ask_factorial_one` can act, so the system prompt limits it to questions.
+  POST `/api/chat` streams NDJSON (`text` / `tool` / `denied` / `done` with `drafts_changed`); the page then calls `load(true)` (reload, keep hand-made blocks).
+  Status line (like the Claude Code HUD): `rate_limit_event` → `limits` (5-hour / weekly utilization + reset), last API call's prompt tokens ÷ `result.modelUsage.contextWindow` → `stats.context`; the latest values are kept in `Chat.stats` and returned by `/api/chat/state`.
+  One turn at a time; the session id persists in `drafts/chat.json` (`--resume`), "New chat" → `/api/chat/reset`. The browser keeps the visible log in `localStorage` (`ts_chat`).
+  Launch auto-draft: `/api/chat/state` reports `autodraft: pending` once per server run, and only while `autodraft_plan()` has work (last week not drafted
+  since it ended → "last"; this week's finished days not drafted today → "this"), else `up-to-date`; the first page claims it (`auto: true` → `auto_draft_message(plan)`).
+  `TIMESHEET_AUTODRAFT=0` disables it. The user works weekly (Monday morning, previous week), so on Mondays the page opens on last week.
 
 
 ## Tests
 
-`tests/test_timesheet.py` is a Playwright test for the web UI. It mocks every `/api/*` response (no Redmine server / API key needed) by route-interception, asserts the main behaviours (render, drag-to-create + popup, manual GIWA-ID option, submit-button disabled when nothing to push, resize-a-logged-block-to-edit (turns blue) + ×-to-delete with confirm, GitLab links, language switcher, drafts: dashed render, Factorial target, delete → `/api/drafts/remove`), and regenerates `docs/timesheet.png` (the README screenshot) against mock data. `tests/test_drafts.py` unit-tests the draft-file helpers (stdlib `unittest`, temp dirs, fake data). Playwright is a dev-only dependency (`pip install playwright && playwright install chromium`); the tool itself stays zero-dependency. Keep the screenshot's data fake — never point it at the real instance, since the repo is public.
+`tests/test_timesheet.py` is a Playwright test for the web UI. It mocks every `/api/*` response (no Redmine server / API key needed) by route-interception, asserts the main behaviours (render, drag-to-create + popup, manual GIWA-ID option, submit-button disabled when nothing to push, resize-a-logged-block-to-edit (turns blue) + ×-to-delete with confirm, GitLab links, language switcher, drafts: dashed render, Factorial target, delete → `/api/drafts/remove`), and regenerates `docs/timesheet.png` (the README screenshot) against mock data. `tests/test_drafts.py` unit-tests the draft-file helpers (stdlib `unittest`, temp dirs, fake data). `tests/test_chat.py` unit-tests `chat.py` against a fake `claude` script (stream-json turns, session resume, reset, one-time auto-draft) and checks the allowlist has no write tools or shell. The Playwright test also covers the chat panel (auto-draft on load, streamed reply, reload on `drafts_changed`, denied tool). Playwright is a dev-only dependency (`pip install playwright && playwright install chromium`); the tool itself stays zero-dependency. Keep the screenshot's data fake — never point it at the real instance, since the repo is public.
 
 ## Redmine API quick reference
 

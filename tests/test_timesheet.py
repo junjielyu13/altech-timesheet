@@ -74,7 +74,7 @@ MOCK_INIT = {
         {"id": 9001, "issue_id": 102, "date": DAYS[0], "hours": 2.5, "subject": "Implement dark mode", "projcode": "Mobile App", "comment": "morning"},
         {"id": 9002, "issue_id": 104, "date": DAYS[1], "hours": 4, "subject": "Landing page redesign", "projcode": "Website", "comment": ""},
     ],
-    # Drafts from the /timesheet-draft skill (as normalized by the server) + Factorial worked hours
+    # Drafts from the timesheet-draft skill (as normalized by the server) + Factorial worked hours
     "drafts": [
         {"key": "m-meeting", "issue_id": 103, "date": DAYS[3], "s": 12 * 60, "e": 12 * 60 + 30,
          "subject": "Internal meeting", "projcode": "Team", "comment": "Weekly sync", "kind": "meeting",
@@ -90,20 +90,52 @@ MOCK_ISSUE = {"id": 27509, "subject": "Manually entered task", "tracker": "Task"
 
 def _install_routes(page):
     page.route("https://demo.local/", lambda r: r.fulfill(content_type="text/html", body=HTML_PAGE))
-    page.route(re.compile(r".*/api/init.*"),
-               lambda r: r.fulfill(content_type="application/json", body=json.dumps(MOCK_INIT)))
+    calls = {"removed": [], "chats": [], "inits": 0}
+
+    def init_route(r):
+        calls["inits"] += 1
+        r.fulfill(content_type="application/json", body=json.dumps(MOCK_INIT))
+    page.route(re.compile(r".*/api/init.*"), init_route)
+
+    # Chat: enabled, auto-draft pending. The auto turn "changes the drafts"; a typed message gets a denied tool.
+    page.route(re.compile(r".*/api/chat/state"),
+               lambda r: r.fulfill(content_type="application/json", body=json.dumps({
+                   "enabled": True, "autodraft": "pending",
+                   "stats": {"five_hour": {"used": 0.42, "resets_at": int(datetime.datetime.now().timestamp()) + 3 * 3600 + 300}}})))
+
+    def chat_route(r):
+        body = json.loads(r.request.post_data)
+        calls["chats"].append(body)
+        evs = [{"t": "limits", "seven_day": {"used": 0.15, "resets_at": int(datetime.datetime.now().timestamp()) + 5 * 86400 + 19 * 3600 + 60}},
+               {"t": "stats", "context": 0.35},
+               {"t": "text", "d": "Drafted "}, {"t": "text", "d": "**last week**."},
+               {"t": "tool", "names": ["redmine · list_time_entries"]}]
+        if not body.get("auto"):
+            evs.append({"t": "denied", "name": "redmine · create_time_entry"})
+        evs.append({"t": "done", "error": None, "drafts_changed": bool(body.get("auto"))})
+        r.fulfill(content_type="application/x-ndjson", body="".join(json.dumps(e) + "\n" for e in evs))
+    page.route(re.compile(r".*/api/chat$"), chat_route)
     page.route(re.compile(r".*/api/issue.*"),
                lambda r: r.fulfill(content_type="application/json", body=json.dumps(MOCK_ISSUE)))
-    removed = []
     page.route(re.compile(r".*/api/drafts/remove"),
-               lambda r: (removed.extend(json.loads(r.request.post_data)["keys"]),
+               lambda r: (calls["removed"].extend(json.loads(r.request.post_data)["keys"]),
                           r.fulfill(content_type="application/json", body='{"removed": 1}')))
-    page.route(re.compile(r".*/api/(ping|close|submit).*"),
+    page.route(re.compile(r".*/api/(ping|close).*"),
                lambda r: r.fulfill(status=200, content_type="application/json", body="{}"))
+    calls["learned"] = []
+
+    def submit_route(r):   # the first entry succeeds; the second is refused like a closed issue
+        entries = json.loads(r.request.post_data)["entries"]
+        res = [dict(e, ok=True) for e in entries[:1]] + [dict(e, ok=False, error="Issue is closed") for e in entries[1:]]
+        r.fulfill(content_type="application/json", body=json.dumps(res))
+    page.route(re.compile(r".*/api/submit"), submit_route)
+    page.route(re.compile(r".*/api/drafts/learn"),
+               lambda r: (calls["learned"].extend(json.loads(r.request.post_data)["entries"]),
+                          r.fulfill(content_type="application/json", body='{"recorded": 1}')))
     # Edit (POST) / delete (DELETE) of an already-logged entry both hit /api/entry
     page.route(re.compile(r".*/api/entry.*"),
                lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True})))
-    return removed
+    return calls
 
 
 def _min_to_y(m):
@@ -116,7 +148,8 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1180, "height": 980}, locale="en-US")
-        removed = _install_routes(page)
+        calls = _install_routes(page)
+        removed = calls["removed"]
         page.goto("https://demo.local/")
 
         # 1) Calendar renders: 5 day columns + already-logged hours as read-only blocks
@@ -124,6 +157,33 @@ def main():
         assert page.locator(".dayhead").count() == 5, "expected 5 weekday columns"
         assert page.locator(".grid .block.locked").count() == 2, "expected 2 already-logged (locked) blocks"
         expect(page.locator("#title")).to_have_text("Altech Timesheet")
+
+        # 0) Chat panel: the first page of a launch opens it and auto-drafts; the reply streams in,
+        #    and because the drafts changed the week reloads.
+        expect(page.locator("#chat")).to_be_visible()
+        expect(page.locator(".cm.assistant").first).to_have_text("Drafted last week.")
+        assert page.locator(".cm.assistant b").count() == 1, "**bold** should render"
+        expect(page.locator(".cm.tool").first).to_contain_text("list_time_entries")
+        # Status line: context + 5-hour usage (from /api/chat/state) + weekly (streamed), with reset countdowns
+        stats = page.locator("#chatStats")
+        expect(stats).to_contain_text("Context ████░░░░░░ 35%")
+        expect(stats).to_contain_text("Usage (5h) ████░░░░░░ 42% · resets in 3h 5m")
+        expect(stats).to_contain_text("Weekly ██░░░░░░░░ 15% · resets in 5d 19h")
+        page.wait_for_function("() => !document.getElementById('chatInput').disabled")
+        assert calls["chats"][0]["auto"] is True and calls["chats"][0]["week_start"] == DAYS[0]
+        page.wait_for_timeout(300)
+        assert calls["inits"] == 2, f"drafts changed → week should reload (inits={calls['inits']})"
+        # A typed message: sent with the week, a denied tool shows as an error, no reload
+        page.fill("#chatInput", "move the meeting to 13:00")
+        page.press("#chatInput", "Enter")
+        expect(page.locator(".cm.user")).to_have_count(2)
+        expect(page.locator(".cm.err")).to_contain_text("create_time_entry")
+        assert calls["chats"][1] == {"message": "move the meeting to 13:00", "auto": False,
+                                     "week_start": DAYS[0], "week_end": DAYS[4]}
+        page.wait_for_timeout(200)
+        assert calls["inits"] == 2, "no draft change → no reload"
+        page.click("#chat .ch-head button[title='×']")
+        expect(page.locator("#chat")).to_be_hidden()
 
         # Drafts render as dashed new blocks, with the reason on hover; they count as pending → submit enabled
         drafts = page.locator(".grid .block.draft")
@@ -140,6 +200,7 @@ def main():
         page.locator(".grid .block.draft .x").first.click()
         page.locator(".grid .block.draft .x").first.click()
         expect(drafts).to_have_count(0)
+        expect(page.locator("#draftNote")).to_have_count(0)   # the "N drafts" notice goes with the last draft
         page.wait_for_timeout(200)
         assert sorted(removed) == ["d-dev", "m-meeting"], f"draft removal not sent: {removed}"
 
@@ -209,6 +270,26 @@ def main():
         expect(page.locator("#title")).to_have_text("Altech 工时日历")
         page.select_option("#langSel", "es")
         expect(page.locator("#title")).to_have_text("Calendario de horas Altech")
+        page.select_option("#langSel", "en")
+
+        # 8) Submit: the confirm lists each day vs. its target; the refused entry stays with a readable
+        #    reason; what was submitted is recorded for learning.
+        page.locator(".grid .block:not(.preview):not(.locked) .x").evaluate_all("els => els.forEach(e => e.click())")
+        for hour in (14, 16):
+            page.mouse.move(x, box["y"] + _min_to_y(hour * 60))
+            page.mouse.down()
+            page.mouse.move(x, box["y"] + _min_to_y(hour * 60 + 60), steps=4)
+            page.mouse.up()
+            page.select_option("#popupTask", "101")
+            page.click("#popup .btn-primary")
+        page.click("#submitBtn")
+        page.wait_for_timeout(300)
+        confirm_msg = dialogs[-1]
+        assert f"{DAYS[3][8:]}: 0 / 7.30 ⚠ 7.30 short" in confirm_msg, confirm_msg
+        assert f"{DAYS[2][8:]}: 2" in confirm_msg, confirm_msg
+        expect(page.locator(".msg.err")).to_contain_text("Issue is closed")
+        assert calls["learned"] == [{"date": DAYS[2], "issue_id": 101, "hours": 1, "draft_key": None, "draft_hours": None}], calls["learned"]
+        assert page.locator(".grid .block:not(.preview):not(.locked)").count() == 1, "the refused block stays for a retry"
 
         browser.close()
     print("ALL CHECKS PASSED")
