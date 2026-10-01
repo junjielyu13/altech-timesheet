@@ -697,8 +697,12 @@ HTML_PAGE = r'''<!DOCTYPE html>
   .block .x:hover { opacity:1; }
   .block .dur { font-weight:700; }
   .block.preview { opacity:.55; }
-  /* a draft from the timesheet-draft skill: a new block with a dashed edge; hover shows why it was drafted */
-  .block.draft { background:#f07a5f; outline:2px dashed rgba(255,255,255,.9); outline-offset:-3px; }
+  /* a draft from the timesheet-draft skill: light orange with an orange edge (solid orange = one you made);
+     hover shows why it was drafted */
+  .block.draft { background:#fdece7; color:#b23a20; border-left:3px solid var(--accent); box-shadow:none; }
+  .block.draft:hover { background:#fbe0d8; }
+  .block.draft .x { background:rgba(232,72,43,.14); }
+  .block.draft .x:hover { background:rgba(232,72,43,.3); }
   /* already-logged blocks: greyed, laid out from 08:00 down; drag to move, resize edges to adjust hours, × to delete */
   .block.locked { background:#eef0f2; color:#6b7178; border-left:3px solid var(--locked); cursor:move; box-shadow:none; }
   .block.locked:hover { background:#e7eaee; }
@@ -880,7 +884,7 @@ const I18N = {
     updateOk: n => `✓ Updated ${n} logged ${n === 1 ? 'entry' : 'entries'}.`,
     confirmDeleteMsg: (id, h) => `Delete the logged entry for #${id} (${h}h) from GIWA? This cannot be undone.`,
     deleteOk: "✓ Entry deleted from GIWA.", deleteFailed: e => `Delete failed: ${e}`,
-    draftsLoaded: n => `📝 ${n} draft ${n === 1 ? 'block' : 'blocks'} loaded (dashed edge). Review them, then submit yourself.`,
+    draftsLoaded: n => `📝 ${n} draft ${n === 1 ? 'block' : 'blocks'} loaded (light orange). Review them, then submit yourself.`,
     workedPlaceholder: h => `${h} (Factorial)`,
     chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "New chat", chatSend: "Send",
     statContext: "Context", statUsage: "Usage (5h)", statWeekly: "Weekly", resetsIn: x => `resets in ${x}`,
@@ -927,7 +931,7 @@ const I18N = {
     updateOk: n => `✓ 已更新 ${n} 条已记录工时。`,
     confirmDeleteMsg: (id, h) => `从 GIWA 删除 #${id} 的这条已记录工时（${h}h）？此操作不可撤销。`,
     deleteOk: "✓ 已从 GIWA 删除。", deleteFailed: e => `删除失败: ${e}`,
-    draftsLoaded: n => `📝 已载入 ${n} 个工时草稿（虚线边框），检查后请自己提交。`,
+    draftsLoaded: n => `📝 已载入 ${n} 个工时草稿（浅橙色块），检查后请自己提交。`,
     workedPlaceholder: h => `${h}（Factorial）`,
     chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "新对话", chatSend: "发送",
     statContext: "上下文", statUsage: "5 小时用量", statWeekly: "本周用量", resetsIn: x => `${x} 后重置`,
@@ -974,7 +978,7 @@ const I18N = {
     updateOk: n => `✓ Actualizada${n === 1 ? '' : 's'} ${n} entrada${n === 1 ? '' : 's'} registrada${n === 1 ? '' : 's'}.`,
     confirmDeleteMsg: (id, h) => `¿Eliminar la entrada registrada de #${id} (${h}h) de GIWA? No se puede deshacer.`,
     deleteOk: "✓ Entrada eliminada de GIWA.", deleteFailed: e => `Error al eliminar: ${e}`,
-    draftsLoaded: n => `📝 ${n} borrador${n === 1 ? '' : 'es'} cargado${n === 1 ? '' : 's'} (borde discontinuo). Revísalos y envíalos tú.`,
+    draftsLoaded: n => `📝 ${n} borrador${n === 1 ? '' : 'es'} cargado${n === 1 ? '' : 's'} (naranja claro). Revísalos y envíalos tú.`,
     workedPlaceholder: h => `${h} (Factorial)`,
     chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "Nuevo chat", chatSend: "Enviar",
     statContext: "Contexto", statUsage: "Uso (5 h)", statWeekly: "Semanal", resetsIn: x => `se reinicia en ${x}`,
@@ -1021,7 +1025,7 @@ const I18N = {
     updateOk: n => `✓ Actualitzada${n === 1 ? '' : 'es'} ${n} entrada${n === 1 ? '' : 'es'} registrada${n === 1 ? '' : 'es'}.`,
     confirmDeleteMsg: (id, h) => `Eliminar l'entrada registrada de #${id} (${h}h) de GIWA? No es pot desfer.`,
     deleteOk: "✓ Entrada eliminada de GIWA.", deleteFailed: e => `Error en eliminar: ${e}`,
-    draftsLoaded: n => `📝 ${n} esborrany${n === 1 ? '' : 's'} carregat${n === 1 ? '' : 's'} (vora discontínua). Revisa'ls i envia'ls tu.`,
+    draftsLoaded: n => `📝 ${n} esborrany${n === 1 ? '' : 's'} carregat${n === 1 ? '' : 's'} (taronja clar). Revisa'ls i envia'ls tu.`,
     workedPlaceholder: h => `${h} (Factorial)`,
     chatOpen: "💬 Claude", chatTitle: "Claude", chatNew: "Xat nou", chatSend: "Envia",
     statContext: "Context", statUsage: "Ús (5 h)", statWeekly: "Setmanal", resetsIn: x => `es reinicia en ${x}`,

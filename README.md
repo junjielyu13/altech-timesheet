@@ -86,7 +86,7 @@ Then just run `./timesheet`:
 
 - **On launch** a chat panel (💬 Claude, right side) drafts **last week**, plus any days of this week that are already over. On Mondays the page opens on last week. It only does this when it's needed: a second launch the same week finds the drafts already there and costs nothing (ask in the chat to redo them).
 - Drafts come from your **worked hours** (Factorial), **meetings** (Outlook), **pushes/MRs** (GitLab) and the **issues you touched** (GIWA). Anything already logged in GIWA is never drafted again.
-- Drafts show as orange blocks with a **dashed edge**; hover one to see why it was drafted. Move, resize or delete them like any new block, or ask in the chat ("move Tuesday's meeting to 12:00", "split Wednesday between #101 and #102"). The page reloads the drafts after each reply.
+- Drafts show as **light-orange** blocks (the ones you add yourself are solid orange); hover one to see why it was drafted. Move, resize or delete them like any new block, or ask in the chat ("move Tuesday's meeting to 12:00", "split Wednesday between #101 and #102"). The page reloads the drafts after each reply.
 - The panel's status line shows the chat's **context** use and your **5-hour** and **weekly** Claude usage, with when each resets.
 - **Nothing is submitted for you.** The chat runs Claude Code headless with an allowlist: it can read those sources and edit files under `drafts/`, and nothing else (no shell, no writes to GIWA, GitLab, Outlook or Factorial). You click **Submit to GIWA**.
 - Meetings go on the project's "Tareas internas" or, with a client present, "Tareas externas" task, as mapped in `drafts/config.json` (Claude asks the first time it meets an unmapped one). The rest of the day (worked − meetings − already logged) is split across the GIWA issues you worked on.
@@ -109,7 +109,7 @@ python3 tests/test_drafts.py          # draft-file helpers (stdlib only)
 python3 tests/test_chat.py            # chat process + allowlist, with a fake claude CLI
 ```
 
-It checks: the calendar renders (5 day columns + already-logged chips), drag-to-create a block opens the task popup, the **manual GIWA-ID** option is present, the **GitLab links** (repo / branch / MR) are clickable, and the **language switcher** (EN/中文/ES/CA) updates the UI, and **drafts** render dashed, use Factorial hours as the target and are removed from the draft file when deleted, and the **chat panel** auto-drafts on launch, streams replies, reloads changed drafts and shows denied tools. Playwright is a **dev-only** dependency — the tool itself stays zero-dependency.
+It checks: the calendar renders (5 day columns + already-logged chips), drag-to-create a block opens the task popup, the **manual GIWA-ID** option is present, the **GitLab links** (repo / branch / MR) are clickable, and the **language switcher** (EN/中文/ES/CA) updates the UI, and **drafts** render light orange, use Factorial hours as the target and are removed from the draft file when deleted, and the **chat panel** auto-drafts on launch, streams replies, reloads changed drafts and shows denied tools. Playwright is a **dev-only** dependency — the tool itself stays zero-dependency.
 
 ---
 

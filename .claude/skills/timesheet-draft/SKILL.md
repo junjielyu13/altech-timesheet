@@ -1,6 +1,6 @@
 ---
 name: timesheet-draft
-description: Generate draft time entries for a week from Factorial (hours worked), Outlook (meetings), GitLab (pushes/MRs) and GIWA (issues you touched), and write them to drafts/<monday>.json so the timesheet page shows them as dashed blocks. Never submits anything. Use when the user asks to draft, pre-fill, redo or prepare their timesheet / hours / imputación.
+description: Generate draft time entries for a week from Factorial (hours worked), Outlook (meetings), GitLab (pushes/MRs) and GIWA (issues you touched), and write them to drafts/<monday>.json so the timesheet page shows them as light-orange draft blocks. Never submits anything. Use when the user asks to draft, pre-fill, redo or prepare their timesheet / hours / imputación.
 user-invocable: false
 ---
 
@@ -136,5 +136,5 @@ Keys must be deterministic (same input → same key) so `dismissed` keeps workin
 ## 5. Report and open
 
 In chat, per day: worked vs logged vs drafted, plus anything unallocated or unmapped. The
-page reloads the drafts itself. Remind the user the drafts are dashed blocks and nothing is
+page reloads the drafts itself. Remind the user the drafts are the light-orange blocks and nothing is
 submitted until they click **Submit to GIWA**.

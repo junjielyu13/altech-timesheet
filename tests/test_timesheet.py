@@ -185,7 +185,7 @@ def main():
         page.click("#chat .ch-head button[title='×']")
         expect(page.locator("#chat")).to_be_hidden()
 
-        # Drafts render as dashed new blocks, with the reason on hover; they count as pending → submit enabled
+        # Drafts render as light-orange new blocks, with the reason on hover; they count as pending → submit enabled
         drafts = page.locator(".grid .block.draft")
         expect(drafts).to_have_count(2)
         assert "12 commits" in (page.locator(f"#grid-{DAYS[3]} .block.draft").first.get_attribute("title")
