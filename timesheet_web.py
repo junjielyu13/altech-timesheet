@@ -1,4 +1,4 @@
-"""GIWA timesheet — a local web app with a weekly calendar view.
+"""Altech Timesheet — a local web app with a weekly calendar view.
 
 Like a calendar: columns = Mon–Fri, vertical axis = time. Drag a block on a day's
 timeline = time spent on a task; the block duration is converted to logged hours.
@@ -6,7 +6,7 @@ Redmine only stores "date + hours" (no clock time), so the timeline is just for
 intuitive layout. Already-logged hours show as grey cards atop each column
 (read-only, never submitted twice).
 
-Invoked by giwa.py's `timesheet` command, with api_get / api_post injected.
+Invoked by timesheet.py, with api_get / api_post injected.
 """
 
 import datetime
@@ -475,7 +475,7 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
     try:
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError:
-        raise RuntimeError(f"Port {port} is in use, try another one: ./giwa timesheet --port 8790")
+        raise RuntimeError(f"Port {port} is in use, try another one: ./timesheet --port 8790")
 
     # Heartbeat watchdog: the page pings every 3s; if no heartbeat arrives within 8s
     # of the tab closing, the server stops automatically.
@@ -507,7 +507,7 @@ HTML_PAGE = r'''<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GIWA Time Calendar</title>
+<title>Altech Timesheet</title>
 <style>
   :root { --line:#e6e8ec; --accent:#e8482b; --ok:#1a8a3a; --new:#e8482b; --locked:#9aa0a8; }
   * { box-sizing: border-box; }
@@ -604,7 +604,7 @@ HTML_PAGE = r'''<!DOCTYPE html>
 </head>
 <body>
 <header>
-  <h1 id="title" data-i18n="title">GIWA Time Calendar</h1>
+  <h1 id="title" data-i18n="title">Altech Timesheet</h1>
   <span class="wk" id="weekLabel">Loading…</span>
   <div class="weeknav">
     <button onclick="changeWeek(-1)" data-i18n="prevWeek">◀ Prev</button>
@@ -662,7 +662,7 @@ HTML_PAGE = r'''<!DOCTYPE html>
 // ---------- i18n: 4 languages (English default), browser auto-detect + switcher ----------
 const I18N = {
   en: {
-    title: "GIWA Time Calendar",
+    title: "Altech Timesheet",
     prevWeek: "◀ Prev", thisWeek: "This week", nextWeek: "Next ▶",
     loading: "Loading…", errPrefix: "Error: ",
     statsTitle: "🧮 This week's hours",
@@ -703,7 +703,7 @@ const I18N = {
     workedPlaceholder: h => `${h} (Factorial)`,
   },
   zh: {
-    title: "GIWA 工时日历",
+    title: "Altech 工时日历",
     prevWeek: "◀ 上周", thisWeek: "本周", nextWeek: "下周 ▶",
     loading: "加载中…", errPrefix: "出错: ",
     statsTitle: "🧮 本周工时统计",
@@ -744,7 +744,7 @@ const I18N = {
     workedPlaceholder: h => `${h}（Factorial）`,
   },
   es: {
-    title: "Calendario de horas GIWA",
+    title: "Calendario de horas Altech",
     prevWeek: "◀ Ant.", thisWeek: "Esta semana", nextWeek: "Sig. ▶",
     loading: "Cargando…", errPrefix: "Error: ",
     statsTitle: "🧮 Horas de esta semana",
@@ -785,7 +785,7 @@ const I18N = {
     workedPlaceholder: h => `${h} (Factorial)`,
   },
   ca: {
-    title: "Calendari d'hores GIWA",
+    title: "Calendari d'hores Altech",
     prevWeek: "◀ Ant.", thisWeek: "Aquesta setmana", nextWeek: "Seg. ▶",
     loading: "Carregant…", errPrefix: "Error: ",
     statsTitle: "🧮 Hores d'aquesta setmana",

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 包装脚本：让你可以直接 ./timesheet
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$DIR/timesheet.py" "$@"

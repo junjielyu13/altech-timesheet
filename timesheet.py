@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""GIWA (Redmine) timesheet — zero dependencies, Python standard library only.
+"""Altech Timesheet: log hours to Redmine (GIWA) — zero dependencies, Python standard library only.
 
 Usage:
-    ./giwa [--port N]   # Local web calendar week view; drag blocks to log time
+    ./timesheet [--port N]   # Local web calendar week view; drag blocks to log time
 
 Configuration:
     Set the following in the .env file at the project root:
@@ -162,7 +162,7 @@ def cmd_timesheet(url, key, rest=None):
         try:
             port = int(rest[rest.index("--port") + 1])
         except (IndexError, ValueError):
-            die("--port must be followed by a port number, e.g. ./giwa --port 8790")
+            die("--port must be followed by a port number, e.g. ./timesheet --port 8790")
     import timesheet_web
     gurl, gtok = gitlab_cfg()
     try:
@@ -175,10 +175,10 @@ def cmd_timesheet(url, key, rest=None):
 
 # ---------- Entry point ----------
 def usage():
-    print("GIWA timesheet\n")
-    print("Usage: ./giwa [--port N]\n")
+    print("Altech Timesheet\n")
+    print("Usage: ./timesheet [--port N]\n")
     print("Opens the local web calendar week view; drag blocks to log time and submit to GIWA.")
-    print("Default port is 8765. `./giwa timesheet` still works as an alias.")
+    print("Default port is 8765.")
     print()
 
 
@@ -187,10 +187,8 @@ def main():
     if args and args[0] in ("-h", "--help", "help"):
         usage()
         sys.exit(0)
-    if args and args[0] == "timesheet":  # old spelling
-        args = args[1:]
     if args and args[0] != "--port":
-        die(f"Unknown argument: {args[0]}\n  Run ./giwa --help for usage.")
+        die(f"Unknown argument: {args[0]}\n  Run ./timesheet --help for usage.")
     url, key = load_env()
     cmd_timesheet(url, key, args)
 

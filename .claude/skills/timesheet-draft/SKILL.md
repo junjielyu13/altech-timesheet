@@ -1,13 +1,13 @@
 ---
 name: timesheet-draft
-description: Generate draft time entries for a week from Factorial (hours worked), Outlook (meetings), GitLab (pushes/MRs) and GIWA (issues you touched), and write them to drafts/<monday>.json so ./giwa shows them as dashed blocks. Never submits anything. Use when the user asks to draft, pre-fill or prepare their timesheet / hours / imputación.
+description: Generate draft time entries for a week from Factorial (hours worked), Outlook (meetings), GitLab (pushes/MRs) and GIWA (issues you touched), and write them to drafts/<monday>.json so ./timesheet shows them as dashed blocks. Never submits anything. Use when the user asks to draft, pre-fill or prepare their timesheet / hours / imputación.
 argument-hint: "[this | last | YYYY-MM-DD]"
 ---
 
 # Draft the week's time entries
 
 Output is a **local file only**. This skill never creates, edits or deletes GIWA time
-entries; the user reviews the drafts in `./giwa` and submits them there.
+entries; the user reviews the drafts in `./timesheet` and submits them there.
 
 Everything you read here is real company data. It goes into `drafts/` (git-ignored) and the
 chat, never into a tracked file — this repo is public.
@@ -121,6 +121,6 @@ Keys must be deterministic (same input → same key) so `dismissed` keeps workin
 ## 5. Report and open
 
 In chat, per day: worked vs logged vs drafted, plus anything unallocated or unmapped. Then
-start `./giwa` in the background (if port 8765 is already in use it's running: tell the
+start `./timesheet` in the background (if port 8765 is already in use it's running: tell the
 user to reload the page). Remind them the drafts are dashed blocks and nothing is submitted
 until they click **Submit to GIWA**.

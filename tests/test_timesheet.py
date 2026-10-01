@@ -123,7 +123,7 @@ def main():
         page.wait_for_selector(".dayhead")
         assert page.locator(".dayhead").count() == 5, "expected 5 weekday columns"
         assert page.locator(".grid .block.locked").count() == 2, "expected 2 already-logged (locked) blocks"
-        expect(page.locator("#title")).to_have_text("GIWA Time Calendar")
+        expect(page.locator("#title")).to_have_text("Altech Timesheet")
 
         # Drafts render as dashed new blocks, with the reason on hover; they count as pending → submit enabled
         drafts = page.locator(".grid .block.draft")
@@ -206,9 +206,9 @@ def main():
 
         # 7) Language switch works (do this after the screenshot so the image stays English)
         page.select_option("#langSel", "zh")
-        expect(page.locator("#title")).to_have_text("GIWA 工时日历")
+        expect(page.locator("#title")).to_have_text("Altech 工时日历")
         page.select_option("#langSel", "es")
-        expect(page.locator("#title")).to_have_text("Calendario de horas GIWA")
+        expect(page.locator("#title")).to_have_text("Calendario de horas Altech")
 
         browser.close()
     print("ALL CHECKS PASSED")

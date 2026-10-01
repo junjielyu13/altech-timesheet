@@ -1,4 +1,4 @@
-# AGENTS.md — GIWA Workspace Guide
+# AGENTS.md — Altech Timesheet Workspace Guide
 
 This file is for AI coding agents to read. It explains what this workspace is, how to help the user get work done, and what the rules are. (Claude Code reads `CLAUDE.md`, which is a symlink to this file.)
 
@@ -35,14 +35,14 @@ The API key is equivalent to account permissions. **Do not write the key into an
 
 ## CLI tool
 
-`giwa.py` (Python 3 standard library, zero dependencies) + the `giwa` wrapper script. It holds the config loading and the Redmine/GitLab HTTP helpers (`api_get/post/put/delete`, `gitlab_get`), which are injected into `timesheet_web.serve`.
+`timesheet.py` (Python 3 standard library, zero dependencies) + the `timesheet` wrapper script. It holds the config loading and the Redmine/GitLab HTTP helpers (`api_get/post/put/delete`, `gitlab_get`), which are injected into `timesheet_web.serve`.
 
 ```bash
-./giwa [--port N]      # `./giwa timesheet` is kept as an alias
-./giwa --help
+./timesheet [--port N]
+./timesheet --help
 ```
 
-- `./giwa [--port N]` — start a local web page · **calendar week view** for logging time (implemented in `timesheet_web.py`).
+- `./timesheet [--port N]` — start a local web page · **calendar week view** for logging time (implemented in `timesheet_web.py`).
   Columns = Monday–Friday, vertical axis = time; drag a block to create a time entry, release to pick a task, the block's duration converts to hours.
   Grey blocks = already-recorded time entries (read from `/time_entries.json` `from`/`to`), drawn on the grid stacked from 08:00 downward.
   They are kept un-aggregated so each carries its own `time_entry` id; Redmine stores only date+hours, so the 08:00 start is just for layout (order is arbitrary).
@@ -71,7 +71,7 @@ The API key is equivalent to account permissions. **Do not write the key into an
   At the top of the selection list there are also two special groups: `🦊 gitlab` (GIWA tasks linked to this week's PRs/branches) and `🕒 this week`
   (issues you worked on during the *selected* week — `assigned_to_id=me&status_id=*&updated_on=><weekStart|weekEnd`, including closed ones, for catching up on time entries).
 
-GitLab integration (read-only, `gitlab_cfg`/`gitlab_get` in `giwa.py`, configured via `GITLAB_URL`/`GITLAB_TOKEN` in `.env`):
+GitLab integration (read-only, `gitlab_cfg`/`gitlab_get` in `timesheet.py`, configured via `GITLAB_URL`/`GITLAB_TOKEN` in `.env`):
   the floating panel "📦 This week's GitLab activity" at the bottom-right of the time calendar lists pushes (repo/branch/commit count) and MRs by day;
   repo / branch / MR are clickable links into GitLab (the server builds `repo_url`, `branch_url`, and the MR `url` from `target_iid`);
   `GIWA<number>` in branch/MR titles is auto-detected and linked to the GIWA issue, and is also used to generate the gitlab task group above.
