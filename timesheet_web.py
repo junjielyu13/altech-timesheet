@@ -12,6 +12,7 @@ Invoked by giwa.py's `timesheet` command, with api_get / api_post injected.
 import datetime
 import http.server
 import json
+import os
 import re
 import threading
 import time
@@ -19,6 +20,11 @@ import urllib.parse
 import webbrowser
 
 ACTIVITY_OTHERS = 17  # the time-entry activity type the user normally uses (Others)
+
+# Draft files written by the /timesheet-draft skill: drafts/<monday>.json (git-ignored, local data only).
+DRAFTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "drafts")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_HM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
 
 def _proj_code(name):
@@ -31,6 +37,84 @@ def _week_dates(week_offset=0):
     today = datetime.date.today()
     monday = today - datetime.timedelta(days=today.weekday()) + datetime.timedelta(days=7 * week_offset)
     return [monday + datetime.timedelta(days=n) for n in range(5)]
+
+
+# ---------- Drafts ----------
+def _drafts_path(week_start, drafts_dir=None):
+    if not _DATE_RE.match(week_start or ""):
+        raise ValueError("invalid week_start")
+    return os.path.join(drafts_dir or DRAFTS_DIR, f"{week_start}.json")
+
+
+def load_drafts(week_start, drafts_dir=None):
+    """Read the draft file for a week; a missing or broken file means no drafts."""
+    try:
+        with open(_drafts_path(week_start, drafts_dir), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def remove_drafts(week_start, keys, drafts_dir=None):
+    """Drop drafts by key (deleted in the page, or submitted). Returns how many were removed.
+    Removed keys go into "dismissed" so regenerating the week doesn't bring them back."""
+    path = _drafts_path(week_start, drafts_dir)
+    d = load_drafts(week_start, drafts_dir)
+    if not d.get("drafts"):
+        return 0
+    keys = set(keys)
+    keep = [x for x in d["drafts"] if x.get("key") not in keys]
+    removed = len(d["drafts"]) - len(keep)
+    if removed:
+        gone = {x.get("key") for x in d["drafts"]} - {x.get("key") for x in keep}
+        d["drafts"] = keep
+        d["dismissed"] = sorted(set(d.get("dismissed") or []) | gone)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    return removed
+
+
+def normalize_drafts(raw, dates, existing, lookup):
+    """Validate the drafts of one week's file and turn them into page blocks.
+
+    dates: the week's ISO dates; existing: already-logged entries (a draft identical to one
+    — same issue, date and hours — is dropped as already done); lookup(issue_id) -> task dict
+    or None. Returns (drafts, worked) where worked = {date: hours} from Factorial.
+    """
+    dates = set(dates)
+    done = {(e["issue_id"], e["date"], round(e["hours"], 2)) for e in existing}
+    out = []
+    for dr in raw.get("drafts") or []:
+        try:
+            iid, date = int(dr["issue_id"]), dr["date"]
+            ms, me = _HM_RE.match(dr["start"]), _HM_RE.match(dr["end"])
+            key = str(dr["key"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if date not in dates or not ms or not me:
+            continue
+        s = int(ms.group(1)) * 60 + int(ms.group(2))
+        e = int(me.group(1)) * 60 + int(me.group(2))
+        if e <= s or (iid, date, round((e - s) / 60, 2)) in done:
+            continue
+        t = lookup(iid)
+        if t is None:
+            continue
+        out.append({"key": key, "issue_id": iid, "date": date, "s": s, "e": e,
+                    "subject": t.get("label") or t["subject"], "projcode": t["projcode"],
+                    "comment": (dr.get("comment") or "").strip(), "kind": dr.get("kind") or "",
+                    "reason": (dr.get("reason") or "").strip()})
+    worked = {}
+    for date, h in (raw.get("worked") or {}).items():
+        try:
+            if date in dates and float(h) > 0:
+                worked[date] = round(float(h), 2)
+        except (TypeError, ValueError):
+            pass
+    return out, worked
 
 
 def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
@@ -223,6 +307,20 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
                     ecache[iid] = "?"
             e["projcode"] = pcode.get(iid) or ecache.get(iid, "?")
 
+        # Drafts from the /timesheet-draft skill, shown as pre-filled new blocks (never auto-submitted).
+        def lookup(iid):
+            t = known_all.get(iid) or recent_map.get(iid)
+            if t is None:
+                # api_get calls die() (SystemExit) on a bad id, so catch that too.
+                try:
+                    t = issue_brief(iid)
+                except (Exception, SystemExit):
+                    return None
+                known_all[iid] = t
+            return t
+        drafts, worked = normalize_drafts(load_drafts(days[0].isoformat()),
+                                          [d.isoformat() for d in days], existing, lookup)
+
         return {
             "base": url,
             "week_offset": week_offset,
@@ -236,6 +334,8 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
             "gitlab_tasks": gitlab_tasks,
             "gitlab": gl_panel,
             "existing": existing,
+            "drafts": drafts,
+            "worked": worked,
         }
 
     def issue_brief(iid):
@@ -347,6 +447,14 @@ def serve(url, key, api_get, api_post, port=8765, extra_ids=None,
                         body["id"], body["hours"], body.get("comment"))))
                 except Exception as e:
                     self._send(500, json.dumps({"error": str(e)}))
+            elif self.path == "/api/drafts/remove":   # local draft file only, never GIWA
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n) or b"{}")
+                try:
+                    removed = remove_drafts(body.get("week_start", ""), body.get("keys") or [])
+                    self._send(200, json.dumps({"removed": removed}))
+                except Exception as e:
+                    self._send(400, json.dumps({"error": str(e)}))
             elif self.path == "/api/close":
                 self._send(200, "{}")
                 threading.Thread(target=srv.shutdown, daemon=True).start()
@@ -449,6 +557,8 @@ HTML_PAGE = r'''<!DOCTYPE html>
   .block .x:hover { opacity:1; }
   .block .dur { font-weight:700; }
   .block.preview { opacity:.55; }
+  /* a draft from /timesheet-draft: a new block with a dashed edge; hover shows why it was drafted */
+  .block.draft { background:#f07a5f; outline:2px dashed rgba(255,255,255,.9); outline-offset:-3px; }
   /* already-logged blocks: greyed, laid out from 08:00 down; drag to move, resize edges to adjust hours, × to delete */
   .block.locked { background:#eef0f2; color:#6b7178; border-left:3px solid var(--locked); cursor:move; box-shadow:none; }
   .block.locked:hover { background:#e7eaee; }
@@ -589,6 +699,8 @@ const I18N = {
     updateOk: n => `✓ Updated ${n} logged ${n === 1 ? 'entry' : 'entries'}.`,
     confirmDeleteMsg: (id, h) => `Delete the logged entry for #${id} (${h}h) from GIWA? This cannot be undone.`,
     deleteOk: "✓ Entry deleted from GIWA.", deleteFailed: e => `Delete failed: ${e}`,
+    draftsLoaded: n => `📝 ${n} draft ${n === 1 ? 'block' : 'blocks'} loaded (dashed edge). Review them, then submit yourself.`,
+    workedPlaceholder: h => `${h} (Factorial)`,
   },
   zh: {
     title: "GIWA 工时日历",
@@ -628,6 +740,8 @@ const I18N = {
     updateOk: n => `✓ 已更新 ${n} 条已记录工时。`,
     confirmDeleteMsg: (id, h) => `从 GIWA 删除 #${id} 的这条已记录工时（${h}h）？此操作不可撤销。`,
     deleteOk: "✓ 已从 GIWA 删除。", deleteFailed: e => `删除失败: ${e}`,
+    draftsLoaded: n => `📝 已载入 ${n} 个工时草稿（虚线边框），检查后请自己提交。`,
+    workedPlaceholder: h => `${h}（Factorial）`,
   },
   es: {
     title: "Calendario de horas GIWA",
@@ -667,6 +781,8 @@ const I18N = {
     updateOk: n => `✓ Actualizada${n === 1 ? '' : 's'} ${n} entrada${n === 1 ? '' : 's'} registrada${n === 1 ? '' : 's'}.`,
     confirmDeleteMsg: (id, h) => `¿Eliminar la entrada registrada de #${id} (${h}h) de GIWA? No se puede deshacer.`,
     deleteOk: "✓ Entrada eliminada de GIWA.", deleteFailed: e => `Error al eliminar: ${e}`,
+    draftsLoaded: n => `📝 ${n} borrador${n === 1 ? '' : 'es'} cargado${n === 1 ? '' : 's'} (borde discontinuo). Revísalos y envíalos tú.`,
+    workedPlaceholder: h => `${h} (Factorial)`,
   },
   ca: {
     title: "Calendari d'hores GIWA",
@@ -706,6 +822,8 @@ const I18N = {
     updateOk: n => `✓ Actualitzada${n === 1 ? '' : 'es'} ${n} entrada${n === 1 ? '' : 'es'} registrada${n === 1 ? '' : 'es'}.`,
     confirmDeleteMsg: (id, h) => `Eliminar l'entrada registrada de #${id} (${h}h) de GIWA? No es pot desfer.`,
     deleteOk: "✓ Entrada eliminada de GIWA.", deleteFailed: e => `Error en eliminar: ${e}`,
+    draftsLoaded: n => `📝 ${n} esborrany${n === 1 ? '' : 's'} carregat${n === 1 ? '' : 's'} (vora discontínua). Revisa'ls i envia'ls tu.`,
+    workedPlaceholder: h => `${h} (Factorial)`,
   },
 };
 function detectLang() {
@@ -742,7 +860,7 @@ function updateWeekLabel() {
   if (DATA && !DATA.error) document.getElementById('weekLabel').textContent = `${DATA.week_start} ~ ${DATA.week_end} ${T.weekN(DATA.week_num)}`;
 }
 
-const START_H = 7, END_H = 22, PXH = 44, SNAP = 15;
+const START_H = 8, END_H = 20, PXH = 72, SNAP = 15;
 const TOTAL_MIN = (END_H - START_H) * 60;
 let DATA = null, weekOffset = 0;
 let blocks = [];          // new blocks {bid, issue_id, subject, date, s, e, comment}
@@ -781,6 +899,11 @@ function parseHM(s) {
 function loadTargets() { try { return JSON.parse(localStorage.getItem('giwa_targets')) || {}; } catch(e) { return {}; } }
 let TARGETS = loadTargets();
 function setTarget(date, val) { const h = parseHM(val); if (h == null || isNaN(h) || h <= 0) delete TARGETS[date]; else TARGETS[date] = h; localStorage.setItem('giwa_targets', JSON.stringify(TARGETS)); recalc(); }
+// A typed target wins; otherwise the day's Factorial worked hours (from the draft file) act as the target.
+function targetOf(date) {
+  if (TARGETS[date] != null) return TARGETS[date];
+  return (DATA && DATA.worked && DATA.worked[date] != null) ? DATA.worked[date] : null;
+}
 
 async function load() {
   const ld = document.getElementById('calLoading');
@@ -792,13 +915,16 @@ async function load() {
     const r = await fetch('/api/init?week=' + weekOffset);
     DATA = await r.json();
     if (DATA.error) { document.getElementById('weekLabel').textContent = T.errPrefix + DATA.error; return; }
-    blocks = [];
+    blocks = (DATA.drafts || []).map(d => ({ bid: bidSeq++, issue_id: d.issue_id, subject: d.subject || '',
+      projcode: d.projcode || '?', date: d.date, s: d.s, e: d.e, comment: d.comment || '',
+      draftKey: d.key, reason: d.reason || '' }));
     buildLogged();
     restoreTimer();
     document.getElementById('result').innerHTML = '';
     render();
     renderGitlab();
     renderStats();
+    if (blocks.length) showMsg(T.draftsLoaded(blocks.length), true);
     // A timer stopped on a day outside the previously-shown week is flushed once that week is loaded.
     if (pendingTimerBlock && DATA.days.some(d => d.date === pendingTimerBlock.date)) {
       blocks.push(pendingTimerBlock); pendingTimerBlock = null; renderBlocks(); recalc();
@@ -819,7 +945,7 @@ function renderStats() {
     const ex = logged.filter(e => e.date === d.date).reduce((s,l)=>s+(l.e-l.s)/60,0);
     const nw = blocks.filter(b => b.date === d.date).reduce((s,b)=>s+(b.e-b.s)/60,0);
     const tot = ex + nw; grand += tot; newTot += nw;
-    const tg = TARGETS[d.date];
+    const tg = targetOf(d.date);
     rows += `<div class="st-row"><span>${dowName(d.date)} ${d.date.slice(8)}</span><span>${tot?fmtDot(tot):'—'}${tg!=null?' / '+fmtDot(tg):''}</span></div>`;
   });
   const proj = {};
@@ -881,7 +1007,11 @@ function render() {
   cal.style.gridTemplateRows = 'auto 1fr';
   cal.innerHTML = html;
   // Restore saved daily targets
-  DATA.days.forEach(d => { const inp = document.getElementById('tg-' + d.date); if (inp && TARGETS[d.date] != null) inp.value = fmtColon(TARGETS[d.date]); });
+  DATA.days.forEach(d => {
+    const inp = document.getElementById('tg-' + d.date); if (!inp) return;
+    if (TARGETS[d.date] != null) inp.value = fmtColon(TARGETS[d.date]);
+    else if (DATA.worked && DATA.worked[d.date] != null) inp.placeholder = T.workedPlaceholder(fmtColon(DATA.worked[d.date]));
+  });
   // Hour lines + drag binding
   DATA.days.forEach(d => {
     const g = document.getElementById('grid-' + d.date);
@@ -1167,7 +1297,8 @@ function renderBlocks() {
     const g = document.getElementById('grid-' + b.date);
     if (!g) return;
     const el = document.createElement('div');
-    el.className = 'block';
+    el.className = 'block' + (b.draftKey ? ' draft' : '');
+    if (b.reason) el.title = b.reason;
     positionBlock(el, b.s, b.e);
     el.innerHTML = `<div class="rsz top"></div><span class="x" onclick="delBlock(${b.bid})" title="${T.del}">×</span>` +
       `<span class="dur">${fmtDot((b.e-b.s)/60)} ${fmt(b.s)}–${fmt(b.e)}</span> 【${b.projcode}】#${b.issue_id}<br>` +
@@ -1176,7 +1307,17 @@ function renderBlocks() {
     g.appendChild(el);
   });
 }
-function delBlock(bid) { blocks = blocks.filter(b => b.bid !== bid); renderBlocks(); recalc(); }
+function delBlock(bid) {
+  const b = blocks.find(x => x.bid === bid);
+  blocks = blocks.filter(x => x.bid !== bid); renderBlocks(); recalc();
+  if (b && b.draftKey) forgetDrafts([b.draftKey]);   // so a reload doesn't bring it back
+}
+// Remove drafts from the local draft file (deleted in the page, or submitted). Never touches GIWA.
+function forgetDrafts(keys) {
+  if (!keys.length || !DATA) return Promise.resolve();
+  return fetch('/api/drafts/remove', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ week_start: DATA.week_start, keys }) }).catch(() => {});
+}
 
 // Drag the whole block to move it / drag the top/bottom edge to resize (15-min snap)
 function blockMouseDown(ev, bid) {
@@ -1203,7 +1344,7 @@ function recalc() {
     const nw = blocks.filter(b => b.date === d.date).reduce((s,b)=>s+(b.e-b.s)/60,0);
     const tot = ex + nw;
     grand += tot;
-    const tg = TARGETS[d.date];
+    const tg = targetOf(d.date);
     const el = document.getElementById('tot-' + d.date);
     const g = document.getElementById('grid-' + d.date);
     let cls = '', bg = '';
@@ -1266,7 +1407,13 @@ async function submitAll() {
       if (ok.length) box.innerHTML += `<div class="msg ok">${T.submitOk(ok.length)}</div>`;
       bad.forEach(b => box.innerHTML += `<div class="msg err">✗ #${b.issue_id} ${b.date} ${b.hours}h — ${b.error}</div>`);
       // Drop the successfully-created blocks from the working set; failed ones stay for retry.
-      ok.forEach(e => { blocks = blocks.filter(b => !(b.issue_id===e.issue_id && b.date===e.date && Math.abs((b.e-b.s)/60 - e.hours) < 0.001)); });
+      const sent = [];
+      ok.forEach(e => { blocks = blocks.filter(b => {
+        const hit = b.issue_id===e.issue_id && b.date===e.date && Math.abs((b.e-b.s)/60 - e.hours) < 0.001;
+        if (hit && b.draftKey) sent.push(b.draftKey);
+        return !hit;
+      }); });
+      await forgetDrafts(sent);
     }
   }
 

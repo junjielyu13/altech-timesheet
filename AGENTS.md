@@ -52,7 +52,7 @@ The API key is equivalent to account permissions. **Do not write the key into an
   and edited (blue) blocks are pushed via POST `/api/entry` → `PUT /time_entries/:id`; a clean run reloads so blue reverts to grey and new blocks get ids.
   The "Submit to GIWA" button is disabled unless there's something to push — a new block or an edited (blue) one — and is also disabled while a week is loading.
   A **live timer** bar sits under the header: pick a task and hit Start to clock in (a ticking ▶ HH:MM:SS shows, dropdown locks); Stop drops a new (orange) block on today's column
-  spanning the wall-clock start→stop (snapped to 15 min, clamped to 07:00–22:00), to submit like any other. The running timer is persisted in `localStorage` (`giwa_timer`) so a reload resumes it;
+  spanning the wall-clock start→stop (snapped to 15 min, clamped to 08:00–20:00), to submit like any other. The running timer is persisted in `localStorage` (`giwa_timer`) so a reload resumes it;
   if Stop happens while viewing another week, it jumps to this week and flushes the block there (`pendingTimerBlock`).
   Client state: `blocks` = new blocks, `logged` = the editable working copy of recorded entries (built by `buildLogged()` on each load), `timer` = the running stopwatch.
   The task dropdown markup is shared by the popup and the timer via `taskGroupsHtml()`.
@@ -78,10 +78,17 @@ GitLab integration (read-only, `gitlab_cfg`/`gitlab_get` in `giwa.py`, configure
   Implementation: `gitlab_activity()` in `timesheet_web.serve` calls `/api/v4/events?after=&before=` (by week),
   and `/api/v4/projects/:id` to get the repo name (with caching). The token should ideally only have read_api+read_user. Write operations are strictly forbidden.
 
+Drafts (`/timesheet-draft` skill in `.claude/skills/timesheet-draft/SKILL.md`):
+  the skill reads Factorial / Outlook / GitLab / GIWA through MCP and writes `drafts/<monday>.json` (git-ignored, real data; meeting→issue map in `drafts/config.json`).
+  It never writes to GIWA. `init()` loads that file via `load_drafts` + `normalize_drafts` (drops invalid drafts, out-of-week dates, unknown issues, and drafts identical to a logged entry)
+  and returns `drafts` (pre-filled new blocks, `draftKey` + `reason`, rendered with the dashed `.block.draft` style) and `worked` (Factorial hours; `targetOf()` uses them when no target is typed).
+  Deleting a draft or submitting it calls POST `/api/drafts/remove` → `remove_drafts`, which drops it from the file and records the key in `dismissed` so regenerating doesn't bring it back.
+  Keep the skill generic — no real meeting names, project names or ids in it (public repo).
+
 
 ## Tests
 
-`tests/test_timesheet.py` is a Playwright test for the web UI. It mocks every `/api/*` response (no Redmine server / API key needed) by route-interception, asserts the main behaviours (render, drag-to-create + popup, manual GIWA-ID option, submit-button disabled when nothing to push, resize-a-logged-block-to-edit (turns blue) + ×-to-delete with confirm, GitLab links, language switcher), and regenerates `docs/timesheet.png` (the README screenshot) against mock data. Playwright is a dev-only dependency (`pip install playwright && playwright install chromium`); the tool itself stays zero-dependency. Keep the screenshot's data fake — never point it at the real instance, since the repo is public.
+`tests/test_timesheet.py` is a Playwright test for the web UI. It mocks every `/api/*` response (no Redmine server / API key needed) by route-interception, asserts the main behaviours (render, drag-to-create + popup, manual GIWA-ID option, submit-button disabled when nothing to push, resize-a-logged-block-to-edit (turns blue) + ×-to-delete with confirm, GitLab links, language switcher, drafts: dashed render, Factorial target, delete → `/api/drafts/remove`), and regenerates `docs/timesheet.png` (the README screenshot) against mock data. `tests/test_drafts.py` unit-tests the draft-file helpers (stdlib `unittest`, temp dirs, fake data). Playwright is a dev-only dependency (`pip install playwright && playwright install chromium`); the tool itself stays zero-dependency. Keep the screenshot's data fake — never point it at the real instance, since the repo is public.
 
 ## Redmine API quick reference
 

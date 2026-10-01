@@ -25,7 +25,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from timesheet_web import HTML_PAGE  # noqa: E402
 
-PXH, START_H = 44, 7  # must match the constants in the page
+PXH, START_H = 72, 8  # must match the constants in the page
 
 # --- Fake week + data (nothing real) ---------------------------------------
 _today = datetime.date.today()
@@ -74,6 +74,15 @@ MOCK_INIT = {
         {"id": 9001, "issue_id": 102, "date": DAYS[0], "hours": 2.5, "subject": "Implement dark mode", "projcode": "Mobile App", "comment": "morning"},
         {"id": 9002, "issue_id": 104, "date": DAYS[1], "hours": 4, "subject": "Landing page redesign", "projcode": "Website", "comment": ""},
     ],
+    # Drafts from the /timesheet-draft skill (as normalized by the server) + Factorial worked hours
+    "drafts": [
+        {"key": "m-meeting", "issue_id": 103, "date": DAYS[3], "s": 12 * 60, "e": 12 * 60 + 30,
+         "subject": "Internal meeting", "projcode": "Team", "comment": "Weekly sync", "kind": "meeting",
+         "reason": "Outlook: Weekly sync (12:00–12:30)"},
+        {"key": "d-dev", "issue_id": 101, "date": DAYS[3], "s": 9 * 60, "e": 12 * 60, "subject": "Fix login crash on Android",
+         "projcode": "Mobile App", "comment": "", "kind": "dev", "reason": "GitLab: 12 commits on feature/GIWA101"},
+    ],
+    "worked": {DAYS[3]: 7.5},
 }
 MOCK_ISSUE = {"id": 27509, "subject": "Manually entered task", "tracker": "Task",
               "project": "Mobile App", "projcode": "Mobile App", "status": "Nueva"}
@@ -85,11 +94,16 @@ def _install_routes(page):
                lambda r: r.fulfill(content_type="application/json", body=json.dumps(MOCK_INIT)))
     page.route(re.compile(r".*/api/issue.*"),
                lambda r: r.fulfill(content_type="application/json", body=json.dumps(MOCK_ISSUE)))
+    removed = []
+    page.route(re.compile(r".*/api/drafts/remove"),
+               lambda r: (removed.extend(json.loads(r.request.post_data)["keys"]),
+                          r.fulfill(content_type="application/json", body='{"removed": 1}')))
     page.route(re.compile(r".*/api/(ping|close|submit).*"),
                lambda r: r.fulfill(status=200, content_type="application/json", body="{}"))
     # Edit (POST) / delete (DELETE) of an already-logged entry both hit /api/entry
     page.route(re.compile(r".*/api/entry.*"),
                lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True})))
+    return removed
 
 
 def _min_to_y(m):
@@ -102,7 +116,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1180, "height": 980}, locale="en-US")
-        _install_routes(page)
+        removed = _install_routes(page)
         page.goto("https://demo.local/")
 
         # 1) Calendar renders: 5 day columns + already-logged hours as read-only blocks
@@ -110,6 +124,24 @@ def main():
         assert page.locator(".dayhead").count() == 5, "expected 5 weekday columns"
         assert page.locator(".grid .block.locked").count() == 2, "expected 2 already-logged (locked) blocks"
         expect(page.locator("#title")).to_have_text("GIWA Time Calendar")
+
+        # Drafts render as dashed new blocks, with the reason on hover; they count as pending → submit enabled
+        drafts = page.locator(".grid .block.draft")
+        expect(drafts).to_have_count(2)
+        assert "12 commits" in (page.locator(f"#grid-{DAYS[3]} .block.draft").first.get_attribute("title")
+                                + page.locator(f"#grid-{DAYS[3]} .block.draft").last.get_attribute("title"))
+        assert "draft" in page.locator("#result").inner_text().lower(), "drafts-loaded notice missing"
+        expect(page.locator("#submitBtn")).to_be_enabled()
+        # Factorial worked hours act as the day's target when none is typed
+        assert "Factorial" in page.locator(f"#tg-{DAYS[3]}").get_attribute("placeholder")
+        expect(page.locator(f"#tot-{DAYS[3]}")).to_have_text("3.30 / 7.30")
+
+        # Deleting a draft removes it from the draft file too (so a reload doesn't bring it back)
+        page.locator(".grid .block.draft .x").first.click()
+        page.locator(".grid .block.draft .x").first.click()
+        expect(drafts).to_have_count(0)
+        page.wait_for_timeout(200)
+        assert sorted(removed) == ["d-dev", "m-meeting"], f"draft removal not sent: {removed}"
 
         # Submit button is disabled until something new is added
         expect(page.locator("#submitBtn")).to_be_disabled()
