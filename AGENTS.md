@@ -49,7 +49,7 @@ The API key is equivalent to account permissions. **Do not write the key into an
   Grey blocks are interactive just like new blocks: drag to move, **resize the top/bottom edge to change the hours** (no confirm), and an × to delete.
   Editing the hours flags the block as modified and turns it **blue** (a pending change, not yet pushed); deleting goes through a `confirm()` and is immediate (DELETE `/api/entry` → `DELETE /time_entries/:id`, then reload).
   On "Submit to GIWA": new (orange) blocks are created via POST `/time_entries.json` (activity fixed at `activity_id=17` Others, empty comment auto-fills "tracker #id: subject"),
-  and edited (blue) blocks are pushed via POST `/api/entry` → `PUT /time_entries/:id`; a clean run reloads so blue reverts to grey and new blocks get ids.
+  and edited (blue) blocks are pushed via POST `/api/entry` → `PUT /time_entries/:id`; every run then reloads (blue reverts to grey, new blocks get ids), even a partly failed one: what went through shows as logged, and the failed blocks and edits are carried over for a retry (`load(keep, keepMods)`).
   The "Submit to GIWA" button is disabled unless there's something to push — a new block or an edited (blue) one — and is also disabled while a week is loading.
   A **live timer** bar sits under the header: pick a task and hit Start to clock in (a ticking ▶ HH:MM:SS shows, dropdown locks); Stop drops a new (orange) block on today's column
   spanning the wall-clock start→stop (snapped to 15 min, clamped to 08:00–20:00), to submit like any other. The running timer is persisted in `localStorage` (`giwa_timer`) so a reload resumes it;

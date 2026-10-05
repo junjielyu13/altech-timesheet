@@ -1116,9 +1116,11 @@ function targetOf(date) {
   return (DATA && DATA.worked && DATA.worked[date] != null) ? DATA.worked[date] : null;
 }
 
-// keepManual: reload the week's data (e.g. after the chat changed the drafts) but keep hand-made new blocks.
-async function load(keepManual) {
-  const manual = keepManual ? blocks.filter(b => !b.draftKey) : [];
+// Reload the week's data from the server. `keep`: new blocks to carry over (hand-made ones after the chat changed
+// the drafts, or blocks that failed to submit); a kept draft replaces its copy from the draft file.
+// `keepMods`: edited logged entries whose push failed, re-applied by id so the edit isn't lost.
+async function load(keep, keepMods) {
+  const kept = keep || [], keptKeys = new Set(kept.map(b => b.draftKey).filter(Boolean));
   const ld = document.getElementById('calLoading');
   ld.classList.add('on');
   // Disable submit while the page is loading; recalc() re-evaluates it once data is rendered.
@@ -1128,14 +1130,18 @@ async function load(keepManual) {
     const r = await fetch('/api/init?week=' + weekOffset);
     DATA = await r.json();
     if (DATA.error) { document.getElementById('weekLabel').textContent = T.errPrefix + DATA.error; return; }
-    blocks = (DATA.drafts || []).map(d => {
+    blocks = (DATA.drafts || []).filter(d => !keptKeys.has(d.key)).map(d => {
       // Keep a draft inside the visible axis (e.g. one placed after clock-out); its length is what counts.
       const dur = Math.min(d.e - d.s, TOTAL_MIN), s = Math.max(START_H*60, Math.min(d.s, END_H*60 - dur));
       return { bid: bidSeq++, issue_id: d.issue_id, subject: d.subject || '', projcode: d.projcode || '?',
                date: d.date, s, e: s + dur, comment: d.comment || '', draftKey: d.key, reason: d.reason || '',
                draftHours: (d.e - d.s) / 60 };
-    }).concat(manual);
+    }).concat(kept);
     buildLogged();
+    (keepMods || []).forEach(m => {
+      const l = logged.find(x => x.id === m.id);
+      if (l) { l.e = l.s + (m.e - m.s); l.comment = m.comment; l.modified = true; }
+    });
     restoreTimer();
     document.getElementById('result').innerHTML = '';
     render();
@@ -1619,29 +1625,31 @@ async function submitAll() {
   btn.disabled = true; btn.textContent = T.submitting;
   const box = document.getElementById('result');
   box.innerHTML = '';
-  let failed = false;
 
   // 1) Push edited logged blocks (PUT via /api/entry).
   let updated = 0;
+  const failedMods = [];
   for (const m of mods) {
     try {
       const r = await fetch('/api/entry', { method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ id: m.id, hours: decH((m.e-m.s)/60), comment: m.comment }) });
       const d = await r.json();
-      if (!r.ok || d.error) { failed = true; box.innerHTML += `<div class="msg err">✗ #${m.issue_id} ${m.date} — ${d.error||r.status}</div>`; }
+      if (!r.ok || d.error) { failedMods.push(m); box.innerHTML += `<div class="msg err">✗ #${m.issue_id} ${m.date} — ${d.error||r.status}</div>`; }
       else updated++;
-    } catch (ex) { failed = true; box.innerHTML += `<div class="msg err">✗ #${m.issue_id} ${m.date} — ${ex}</div>`; }
+    } catch (ex) { failedMods.push(m); box.innerHTML += `<div class="msg err">✗ #${m.issue_id} ${m.date} — ${ex}</div>`; }
   }
   if (updated) box.innerHTML += `<div class="msg ok">${T.updateOk(updated)}</div>`;
 
   // 2) Create new blocks (POST /api/submit).
-  let bad = [];
   if (entries.length) {
-    const r = await fetch('/api/submit', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ entries }) });
-    const res = await r.json();
-    if (res.error) { failed = true; box.innerHTML += `<div class="msg err">${T.submitFailed(res.error)}</div>`; }
+    let res;
+    try {
+      const r = await fetch('/api/submit', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ entries }) });
+      res = await r.json();
+    } catch (ex) { res = { error: String(ex) }; }
+    if (res.error) { box.innerHTML += `<div class="msg err">${T.submitFailed(res.error)}</div>`; }
     else {
-      const ok = res.filter(x=>x.ok); bad = res.filter(x=>!x.ok);
+      const ok = res.filter(x=>x.ok), bad = res.filter(x=>!x.ok);
       if (ok.length) box.innerHTML += `<div class="msg ok">${T.submitOk(ok.length)}</div>`;
       bad.forEach(b => box.innerHTML += `<div class="msg err">✗ #${b.issue_id} ${b.date} ${b.hours}h — ${b.error}</div>`);
       // Drop the successfully-created blocks from the working set; failed ones stay for retry.
@@ -1663,9 +1671,11 @@ async function submitAll() {
   }
 
   btn.disabled = false; btn.textContent = T.submit;
-  // Clean run → reload so everything reflects the server (blue edits become grey again, new blocks get ids).
-  if (!failed && !bad.length) { await load(); return; }
-  render();
+  // Always reload so what went through shows as logged (grey, with ids), even when part of the run failed;
+  // the blocks and edits that failed are carried over for a retry, and the result messages stay.
+  const msgs = box.innerHTML;
+  await load(blocks, failedMods);
+  box.insertAdjacentHTML('afterbegin', msgs);
 }
 
 // ---------- Chat panel: a headless Claude that reads the sources and edits drafts (never submits) ----------
@@ -1763,7 +1773,7 @@ async function sendChat(text, auto) {
     }
   } catch (ex) { CHAT.log.push({ role: 'error', text: T.chatError(ex.message || ex) }); }
   CHAT.busy = false; saveChatLog(); renderChat(); updateChatInput();
-  if (changed) load(true);   // Claude edited the drafts → show them (hand-made blocks are kept)
+  if (changed) load(blocks.filter(b => !b.draftKey));   // Claude edited the drafts → show them (hand-made blocks are kept)
 }
 async function newChat() {
   if (CHAT.busy) return;

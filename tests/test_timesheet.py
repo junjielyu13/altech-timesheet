@@ -94,7 +94,9 @@ def _install_routes(page):
 
     def init_route(r):
         calls["inits"] += 1
-        r.fulfill(content_type="application/json", body=json.dumps(MOCK_INIT))
+        # Like the real draft file, drafts deleted or submitted in the page don't come back on reload
+        data = dict(MOCK_INIT, drafts=[d for d in MOCK_INIT["drafts"] if d["key"] not in calls["removed"]])
+        r.fulfill(content_type="application/json", body=json.dumps(data))
     page.route(re.compile(r".*/api/init.*"), init_route)
 
     # Chat: enabled, auto-draft pending. The auto turn "changes the drafts"; a typed message gets a denied tool.
@@ -282,6 +284,7 @@ def main():
             page.mouse.up()
             page.select_option("#popupTask", "101")
             page.click("#popup .btn-primary")
+        inits_before = calls["inits"]
         page.click("#submitBtn")
         page.wait_for_timeout(300)
         confirm_msg = dialogs[-1]
@@ -290,6 +293,9 @@ def main():
         expect(page.locator(".msg.err")).to_contain_text("Issue is closed")
         assert calls["learned"] == [{"date": DAYS[2], "issue_id": 101, "hours": 1, "draft_key": None, "draft_hours": None}], calls["learned"]
         assert page.locator(".grid .block:not(.preview):not(.locked)").count() == 1, "the refused block stays for a retry"
+        # A partial failure still reloads from the server, so what went through shows as logged
+        assert calls["inits"] == inits_before + 1, "the page reloads after a partly failed submit"
+        expect(page.locator(".msg.ok")).to_contain_text("Submitted 1")
 
         browser.close()
     print("ALL CHECKS PASSED")
